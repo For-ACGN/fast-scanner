@@ -3,9 +3,11 @@ package Scanner
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"math/big"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -30,9 +32,9 @@ func GetIP(ctx context.Context, targets []string) (<-chan net.IP, error) {
 		hyphen := strings.Index(targets[i], "-")
 		dash := strings.Index(targets[i], "/")
 		switch {
-		case hyphen+dash == -2: // "192.168.1.1"
+		case hyphen+dash == -2: // single ip "192.168.1.1"
 			ipChan <- net.ParseIP(targets[i])
-		case hyphen != -1 && dash == -1: // "192.168.1.1-192.168.1.2"
+		case hyphen != -1 && dash == -1: // range "192.168.1.1-192.168.1.2"
 			// same ip type
 			// start < stop
 			wg.Add(1)
@@ -42,7 +44,7 @@ func GetIP(ctx context.Context, targets []string) (<-chan net.IP, error) {
 				}()
 				genIPWithHyphen(ctx, ipChan, targets[i])
 			}(targets[i])
-		case hyphen == -1 && dash != -1: // "192.168.1.1/24"
+		case hyphen == -1 && dash != -1: // CIDR "192.168.1.1/24"
 			wg.Add(1)
 			go func(target string) {
 				defer func() {
@@ -64,40 +66,42 @@ func GetIP(ctx context.Context, targets []string) (<-chan net.IP, error) {
 // Range
 func genIPWithHyphen(ctx context.Context, ipChan chan<- net.IP, target string) {
 	ips := strings.Split(target, "-")
-	delta := big.NewInt(1)
-	ip := net.ParseIP(ips[0]).To4()
-	if ip != nil { // ipv4
-		startIP := new(big.Int).SetBytes(ip)
-		stopIP := new(big.Int).SetBytes(net.ParseIP(ips[1]).To4()).Bytes()
+	startIP := net.ParseIP(ips[0])
+	stopIP := net.ParseIP(ips[1])
+	ipv4 := startIP.To4()
+	if ipv4 != nil { // ipv4
+		start := binary.BigEndian.Uint32(ipv4)
+		stop := binary.BigEndian.Uint32(stopIP.To4())
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			default:
-				b := paddingSlice4(startIP.Bytes())
-				ipChan <- net.IP(b)
-				startIP.SetBytes(b)
-				if bytes.Equal(startIP.Bytes(), stopIP) {
+				// uint32 -> bytes
+				address := make([]byte, 4)
+				binary.BigEndian.PutUint32(address, start)
+				ipChan <- net.IP(address)
+				if start == stop {
 					return
 				}
-				startIP.Add(startIP, delta)
+				start += 1
 			}
 		}
 	} else { // ipv6
-		startIP := new(big.Int).SetBytes(net.ParseIP(ips[0]).To16())
-		stopIP := new(big.Int).SetBytes(net.ParseIP(ips[1]).To16()).Bytes()
+		delta := big.NewInt(1)
+		start := new(big.Int).SetBytes(startIP.To16())
+		stop := new(big.Int).SetBytes(stopIP.To16()).Bytes()
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			default:
-				b := paddingSlice16(startIP.Bytes())
-				ipChan <- net.IP(b)
-				startIP.SetBytes(b)
-				if bytes.Equal(startIP.Bytes(), stopIP) {
+				b := start.Bytes()
+				ipChan <- net.IP(paddingSlice16(b))
+				if bytes.Equal(b, stop) {
 					return
 				}
-				startIP.Add(startIP, delta)
+				start.Add(start, delta)
 			}
 		}
 	}
@@ -105,21 +109,45 @@ func genIPWithHyphen(ctx context.Context, ipChan chan<- net.IP, target string) {
 
 // CIDR
 func genIPWithDash(ctx context.Context, ipChan chan<- net.IP, target string) {
-	ip, _, _ := net.ParseCIDR(target)
+	ip, ipnet, _ := net.ParseCIDR(target)
+	n, _ := strconv.Atoi(strings.Split(ipnet.String(), "/")[1])
+	delta := big.NewInt(1)
+	i := new(big.Int)
 	if ip.To4() != nil { // ipv4
-
-		//net.IPv4bcast
-
+		hostNumber := new(big.Int).Lsh(big.NewInt(1), uint(net.IPv4len*8-n))
+		hostNumber.Sub(hostNumber, delta) // for loop
+		hostNumberBytes := hostNumber.Bytes()
+		startIP := new(big.Int).SetBytes(ipnet.IP)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				ipChan <- net.IP(paddingSlice4(startIP.Bytes()))
+				if bytes.Equal(i.Bytes(), hostNumberBytes) {
+					return
+				}
+				i.Add(i, delta)
+				startIP.Add(startIP, delta)
+			}
+		}
 	} else { // ipv6
-
-	}
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-
+		hostNumber := new(big.Int).Lsh(big.NewInt(1), uint(net.IPv6len*8-n))
+		hostNumber.Sub(hostNumber, delta) // for loop
+		hostNumberBytes := hostNumber.Bytes()
+		startIP := new(big.Int).SetBytes(ipnet.IP)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				ipChan <- net.IP(paddingSlice16(startIP.Bytes()))
+				if bytes.Equal(i.Bytes(), hostNumberBytes) {
+					return
+				}
+				i.Add(i, delta)
+				startIP.Add(startIP, delta)
+			}
 		}
 	}
 }
