@@ -1,4 +1,4 @@
-package Scanner
+package scanner
 
 import (
 	"bytes"
@@ -18,7 +18,7 @@ func ExampleParseTarget() {
 		"192.168.1.1, 192.168.1.2",
 	}
 	for _, str := range testdata {
-		fmt.Println(ParseTarget(str))
+		fmt.Println(ParseTargets(str))
 	}
 	// Output:
 	// [192.168.1.1]

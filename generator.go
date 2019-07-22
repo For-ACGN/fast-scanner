@@ -1,23 +1,28 @@
-package Scanner
+package scanner
 
 import (
 	"bytes"
 	"context"
 	"encoding/binary"
-	"errors"
 	"math"
 	"math/big"
 	"net"
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/pkg/errors"
 )
+
+func GenTargets(ctx context.Context, target string) (<-chan net.IP, error) {
+	return GenIP(ctx, ParseTargets(target))
+}
 
 // ParseAddress is used to parse target like
 // "192.168.1.1,192.168.1.1/24,192.168.1.1-192.168.1.254"
 // to address slice []string{"192.168.1.1", "192.168.1.0/24",
 // "192.168.1.1-192.168.1.254"}
-func ParseTarget(str string) []string {
+func ParseTargets(str string) []string {
 	addrs := strings.Split(str, ",")
 	for i := 0; i < len(addrs); i++ {
 		addrs[i] = strings.Replace(addrs[i], " ", "", -1)
