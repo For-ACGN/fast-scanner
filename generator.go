@@ -23,11 +23,8 @@ func GenTargets(ctx context.Context, target string) (<-chan net.IP, error) {
 // to address slice []string{"192.168.1.1", "192.168.1.0/24",
 // "192.168.1.1-192.168.1.254"}
 func ParseTargets(str string) []string {
-	addrs := strings.Split(str, ",")
-	for i := 0; i < len(addrs); i++ {
-		addrs[i] = strings.Replace(addrs[i], " ", "", -1)
-	}
-	return addrs
+	str = strings.Replace(str, " ", "", -1)
+	return strings.Split(str, ",")
 }
 
 func GenIP(ctx context.Context, targets []string) (<-chan net.IP, error) {
