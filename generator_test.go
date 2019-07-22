@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log"
 	"net"
 	"testing"
 
@@ -23,6 +24,79 @@ func ExampleParseTarget() {
 	// [192.168.1.1]
 	// [192.168.1.1 192.168.1.2]
 	// [192.168.1.1 192.168.1.2]
+}
+
+func ExampleGenIP() {
+	testdata := [][]string{
+		{"192.168.1.1"},
+		{"192.168.1.1-192.168.1.1"},
+		{"192.168.1.1-192.168.1.3"},
+		{"192.168.1.1/32"},
+		{"fe80::1"},
+		{"fe80::1-fe80::1"},
+		{"fe80::1-fe80::2"},
+	}
+	for _, targets := range testdata {
+		ctx := context.Background()
+		generator, err := GenIP(ctx, targets)
+		if err != nil {
+			log.Fatalln(err)
+		}
+		for ip := range generator {
+			fmt.Println(ip)
+		}
+	}
+	// Output:
+	// 192.168.1.1
+	// 192.168.1.1
+	// 192.168.1.1
+	// 192.168.1.2
+	// 192.168.1.3
+	// 192.168.1.1
+	// fe80::1
+	// fe80::1
+	// fe80::1
+	// fe80::2
+}
+
+func TestGenIPInvalidTargets(t *testing.T) {
+	testdata := [][]string{
+		// single
+		{"192.168.1.256"}, // invalid single ipv4
+		{"fg::1"},         // invalid single ipv6
+		// range
+		{"192.168.1.1-192.168.1.1-"},  // 2 "-"
+		{"192.168.1.256-192.168.1.1"}, // invalid start ipv4
+		{"fg::1-fg::1"},               // invalid start ipv6
+		{"192.168.1.1-192.168.1.256"}, // invalid stop ipv4
+		{"fe80::1-fg80::1"},           // invalid stop ipv6
+		{"192.168.1.1-fe80::1"},       // start ip type != stop ip type
+		{"fe80::1-192.168.1.1"},       // start ip type != stop ip type
+		{"192.168.1.2-192.168.1.1"},   // start ipv4 > stop ipv6
+		{"fe80::2-fe80::1"},           // start ipv6 > stop ipv6
+		// CIDR
+		{"192.168.1.1/33"}, // ipv4
+		{"fe80::1/129"},    // ipv6
+		// range & CIDR
+		{"192.168.1.1-192.168.1.2/24"},
+	}
+	for _, targets := range testdata {
+		ctx := context.Background()
+		_, err := GenIP(ctx, targets)
+		require.NotNil(t, err)
+	}
+}
+
+func TestGenIPInterrupt(t *testing.T) {
+	testdata := [][]string{
+		{"192.168.1.2-192.168.1.22", "192.168.1.256"},
+		{"192.168.1.2-192.168.1.255", "192.168.1.255", "192.168.1.256"},
+	}
+	for _, targets := range testdata {
+		ctx := context.Background()
+		_, err := GenIP(ctx, targets)
+		require.NotNil(t, err)
+	}
 }
 
 func TestGenIPWithHyphen(t *testing.T) {
