@@ -594,9 +594,6 @@ func TestGenIPWithDash(t *testing.T) {
 192.168.1.13
 192.168.1.14
 192.168.1.15
-fe80::0
-fe80::1
-::1
 `
 	ipChan := make(chan net.IP, 1)
 	ctx := context.Background()
@@ -613,8 +610,4 @@ fe80::1
 		_, _ = fmt.Fprintln(b, ip)
 	}
 	require.Equal(t, expected, b.String())
-
-	ip, ipnet, _ := net.ParseCIDR("fe80::1/127")
-	fmt.Println(ip, ipnet, ipnet.IP, ipnet.Mask)
-
 }

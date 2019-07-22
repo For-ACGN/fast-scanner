@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"math"
 	"math/big"
 	"net"
 	"strconv"
@@ -70,6 +71,7 @@ func genIPWithHyphen(ctx context.Context, ipChan chan<- net.IP, target string) {
 	stopIP := net.ParseIP(ips[1])
 	ipv4 := startIP.To4()
 	if ipv4 != nil { // ipv4
+		// bytes to uint32
 		start := binary.BigEndian.Uint32(ipv4)
 		stop := binary.BigEndian.Uint32(stopIP.To4())
 		for {
@@ -77,10 +79,7 @@ func genIPWithHyphen(ctx context.Context, ipChan chan<- net.IP, target string) {
 			case <-ctx.Done():
 				return
 			default:
-				// uint32 -> bytes
-				address := make([]byte, 4)
-				binary.BigEndian.PutUint32(address, start)
-				ipChan <- net.IP(address)
+				ipChan <- net.IP(uint32ToBytes(start))
 				if start == stop {
 					return
 				}
@@ -111,27 +110,26 @@ func genIPWithHyphen(ctx context.Context, ipChan chan<- net.IP, target string) {
 func genIPWithDash(ctx context.Context, ipChan chan<- net.IP, target string) {
 	ip, ipnet, _ := net.ParseCIDR(target)
 	n, _ := strconv.Atoi(strings.Split(ipnet.String(), "/")[1])
-	delta := big.NewInt(1)
-	i := new(big.Int)
 	if ip.To4() != nil { // ipv4
-		hostNumber := new(big.Int).Lsh(big.NewInt(1), uint(net.IPv4len*8-n))
-		hostNumber.Sub(hostNumber, delta) // for loop
-		hostNumberBytes := hostNumber.Bytes()
-		startIP := new(big.Int).SetBytes(ipnet.IP)
+		i := uint32(0)
+		hostNumber := uint32(math.Pow(2, float64(net.IPv4len*8-n)))
+		address := binary.BigEndian.Uint32(ipnet.IP)
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			default:
-				ipChan <- net.IP(paddingSlice4(startIP.Bytes()))
-				if bytes.Equal(i.Bytes(), hostNumberBytes) {
+				ipChan <- net.IP(uint32ToBytes(address))
+				i += 1
+				if i == hostNumber {
 					return
 				}
-				i.Add(i, delta)
-				startIP.Add(startIP, delta)
+				address += 1
 			}
 		}
 	} else { // ipv6
+		delta := big.NewInt(1)
+		i := new(big.Int)
 		hostNumber := new(big.Int).Lsh(big.NewInt(1), uint(net.IPv6len*8-n))
 		hostNumber.Sub(hostNumber, delta) // for loop
 		hostNumberBytes := hostNumber.Bytes()
@@ -152,17 +150,13 @@ func genIPWithDash(ctx context.Context, ipChan chan<- net.IP, target string) {
 	}
 }
 
-// []byte{1} -> []byte{0, 0, 0, 1}
-func paddingSlice4(s []byte) []byte {
-	l := len(s)
-	if l == net.IPv4len {
-		return s
-	}
-	p := make([]byte, net.IPv4len)
-	copy(p[4-l:], s)
-	return p
+func uint32ToBytes(n uint32) []byte {
+	buffer := make([]byte, 4)
+	binary.BigEndian.PutUint32(buffer, n)
+	return buffer
 }
 
+// []byte{1} -> []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1}
 func paddingSlice16(s []byte) []byte {
 	l := len(s)
 	if l == 16 {
