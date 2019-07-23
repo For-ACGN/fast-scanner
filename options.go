@@ -14,7 +14,7 @@ type Options struct {
 
 func (opt *Options) apply() {
 	if opt.Goroutines < 1 {
-		opt.Goroutines = 128 * runtime.NumCPU()
+		opt.Goroutines = 4096 * runtime.NumCPU()
 	}
 	if opt.DialTimeout < 1 {
 		opt.DialTimeout = 3 * time.Second

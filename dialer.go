@@ -1,9 +1,13 @@
 package scanner
 
 import (
+	"fmt"
 	"net"
+	"os"
 	"strconv"
 	"sync"
+	"syscall"
+	"time"
 )
 
 const (
@@ -54,12 +58,70 @@ func (s *Scanner) dialer(ips <-chan net.IP) {
 		case <-s.ctx.Done():
 			return
 		case ip := <-ips:
-			raddr, _ := net.ResolveTCPAddr("tcp", ip.String())
-			conn, err := net.DialTCP("tcp", s.getLocalAddr(), raddr)
-			if err != nil {
-
+			if ip == nil {
+				return
 			}
-			s.Conns <- conn
+			for _, port := range s.ports {
+				s.dial(ip, port)
+			}
 		}
 	}
+}
+
+func (s *Scanner) dial(ip net.IP, port string) {
+	var address string
+	if len(ip) == net.IPv4len {
+		address = ip.String() + ":" + port
+	} else {
+		address = "[" + ip.String() + "]:" + port
+	}
+	for {
+		select {
+		case <-s.ctx.Done():
+			return
+		default:
+			d := &net.Dialer{
+				Timeout: s.opts.DialTimeout,
+			}
+			laddr := s.getLocalAddr()
+			if laddr != nil {
+				d.LocalAddr = laddr
+			}
+			conn, err := d.Dial("tcp", address)
+			if err != nil {
+				if isLocalError(err) {
+					time.Sleep(250 * time.Millisecond)
+					continue
+				} else {
+					return
+				}
+			}
+			s.Conns <- conn.(*net.TCPConn)
+			return
+		}
+	}
+}
+
+func isLocalError(err error) bool {
+	syscallErr, ok := err.(*net.OpError).Err.(*os.SyscallError)
+	if !ok {
+		return false
+	}
+	errno := syscallErr.Err.(syscall.Errno)
+	switch int(errno) {
+	case 10013:
+		// An attempt was made to access a socket in a way
+		// forbidden by its access permissions.
+	case 10048:
+		// Only one usage of each socket address
+		// (protocol/network address/port) is normally permitted
+	case 10055:
+		// An operation on a socket could not be
+		// performed because the system lacked sufficient
+		// buffer space or because a queue was full.
+	default:
+		panic(fmt.Sprintln(int(errno), errno))
+		return false
+	}
+	return true
 }
