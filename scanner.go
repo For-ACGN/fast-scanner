@@ -3,6 +3,7 @@ package scanner
 import (
 	"context"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -10,9 +11,9 @@ import (
 )
 
 type Scanner struct {
-	targets     string
-	ports       string
 	opts        *Options
+	targets     []string
+	ports       []string
 	ctx         context.Context
 	cancel      func()
 	laddrsIndex int
@@ -37,12 +38,23 @@ func New(targets, ports string, opts *Options) (*Scanner, error) {
 	}
 	opts.apply()
 	s := Scanner{
-		targets: targets,
-		ports:   ports,
-		opts:    opts,
-		Conns:   make(chan *net.TCPConn, 128*opts.Goroutines),
+		opts:  opts,
+		Conns: make(chan *net.TCPConn, 128*opts.Goroutines),
 	}
-	s.ctx, s.cancel = context.WithCancel(context.Background())
+	targets = strings.Replace(targets, " ", "", -1)
+	s.targets = strings.Split(targets, ",")
+	// check ports range
+	ports = strings.Replace(ports, " ", "", -1)
+	s.ports = strings.Split(ports, ",")
+	for _, port := range s.ports {
+		n, err := strconv.Atoi(port)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		if n < 1 || n > 65535 {
+			return nil, errors.New("no ports")
+		}
+	}
 	// add local address
 	if opts.LocalAddrs != "" {
 		str := strings.Replace(opts.LocalAddrs, " ", "", -1)
@@ -51,8 +63,18 @@ func New(targets, ports string, opts *Options) (*Scanner, error) {
 		s.laddrsEnd = l - 1
 		s.laddrs = make([]*laddr, l)
 		for i := 0; i < l; i++ {
+			ip := net.ParseIP(addrs[i])
+			if ip == nil {
+				return nil, errors.Errorf("invalid ip: %s", addrs[i])
+			}
+			var dst string
+			if i := ip.To4(); i != nil {
+				dst = i.String()
+			} else {
+				dst = "[" + ip.To16().String() + "]"
+			}
 			s.laddrs[i] = &laddr{
-				address: addrs[i],
+				address: dst,
 				port:    minPort,
 			}
 		}
@@ -63,8 +85,11 @@ func New(targets, ports string, opts *Options) (*Scanner, error) {
 }
 
 func (s *Scanner) Start() error {
+	var err error
 	s.startOnce.Do(func() {
-		ips, err := GenTargets(s.ctx, s.targets)
+		var ips <-chan net.IP
+		s.ctx, s.cancel = context.WithCancel(context.Background())
+		ips, err = GenIP(s.ctx, s.targets)
 		if err != nil {
 			return
 		}
@@ -72,9 +97,12 @@ func (s *Scanner) Start() error {
 			s.wg.Add(1)
 			go s.dialer(ips)
 		}
+		go func() {
+			s.wg.Wait()
+			close(s.Conns)
+		}()
 	})
-
-	return nil
+	return err
 }
 
 func (s *Scanner) Stop() {
