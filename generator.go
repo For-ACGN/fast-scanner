@@ -14,19 +14,6 @@ import (
 	"github.com/pkg/errors"
 )
 
-func GenTargets(ctx context.Context, target string) (<-chan net.IP, error) {
-	return GenIP(ctx, ParseTargets(target))
-}
-
-// ParseAddress is used to parse target like
-// "192.168.1.1,192.168.1.1/24,192.168.1.1-192.168.1.254"
-// to address slice []string{"192.168.1.1", "192.168.1.0/24",
-// "192.168.1.1-192.168.1.254"}
-func ParseTargets(str string) []string {
-	str = strings.Replace(str, " ", "", -1)
-	return strings.Split(str, ",")
-}
-
 func GenIP(ctx context.Context, targets []string) (<-chan net.IP, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	l := len(targets)
@@ -46,17 +33,21 @@ func GenIP(ctx context.Context, targets []string) (<-chan net.IP, error) {
 		switch {
 		case hyphen+dash == -2: // single ip "192.168.1.1"
 			ip := net.ParseIP(targets[i])
-			if ip.To4() == nil {
-				if ip.To16() == nil {
-					interrupt()
-					return nil, errors.New("invalid ip: " + targets[i])
-				}
+			if ip == nil {
+				interrupt()
+				return nil, errors.New("invalid ip: " + targets[i])
+			}
+			var dst net.IP
+			if i := ip.To4(); i != nil {
+				dst = i
+			} else {
+				dst = ip.To16()
 			}
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
 				select {
-				case ipChan <- ip:
+				case ipChan <- dst:
 				case <-ctx.Done():
 					return
 				}

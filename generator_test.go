@@ -11,21 +11,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func ExampleParseTarget() {
-	testdata := []string{
-		"192.168.1.1",
-		"192.168.1.1,192.168.1.2",
-		"192.168.1.1, 192.168.1.2",
-	}
-	for _, str := range testdata {
-		fmt.Println(ParseTargets(str))
-	}
-	// Output:
-	// [192.168.1.1]
-	// [192.168.1.1 192.168.1.2]
-	// [192.168.1.1 192.168.1.2]
-}
-
 func ExampleGenIP() {
 	testdata := [][]string{
 		{"192.168.1.1"},
@@ -43,20 +28,20 @@ func ExampleGenIP() {
 			log.Fatalln(err)
 		}
 		for ip := range generator {
-			fmt.Println(ip)
+			fmt.Println(ip, len(ip))
 		}
 	}
 	// Output:
-	// 192.168.1.1
-	// 192.168.1.1
-	// 192.168.1.1
-	// 192.168.1.2
-	// 192.168.1.3
-	// 192.168.1.1
-	// fe80::1
-	// fe80::1
-	// fe80::1
-	// fe80::2
+	// 192.168.1.1 4
+	// 192.168.1.1 4
+	// 192.168.1.1 4
+	// 192.168.1.2 4
+	// 192.168.1.3 4
+	// 192.168.1.1 4
+	// fe80::1 16
+	// fe80::1 16
+	// fe80::1 16
+	// fe80::2 16
 }
 
 func TestGenIPInvalidTargets(t *testing.T) {
