@@ -14,6 +14,11 @@ import (
 	"github.com/pkg/errors"
 )
 
+func split(str string) []string {
+	str = strings.Replace(str, " ", "", -1)
+	return strings.Split(str, ",")
+}
+
 func GenIP(ctx context.Context, targets []string) (<-chan net.IP, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	l := len(targets)
