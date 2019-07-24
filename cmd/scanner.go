@@ -4,10 +4,8 @@ import (
 	"bytes"
 	"flag"
 	"log"
-	"net"
 	"os"
 	"os/signal"
-	"runtime"
 	"time"
 
 	"scanner"
@@ -34,9 +32,9 @@ func main() {
 	flag.DurationVar(&dialTimeout, "timeout", 0, "")
 	flag.Parse()
 	opts := &scanner.Options{
-		LocalAddrs:  localAddrs,
-		Goroutines:  goroutines,
-		DialTimeout: dialTimeout,
+		LocalIP:    localAddrs,
+		Goroutines: goroutines,
+		Timeout:    dialTimeout,
 	}
 	s, err := scanner.New(targets, ports, opts)
 	if err != nil {
@@ -54,16 +52,8 @@ func main() {
 		s.Stop()
 		log.Println("stop")
 	}()
-	for i := 0; i < 4096*runtime.NumCPU(); i++ {
-		go handleConn(s.Conns)
+	for addr := range s.Address {
+		log.Println(addr)
 	}
-	handleConn(s.Conns)
 	log.Println("scan finished")
-}
-
-func handleConn(conn <-chan *net.TCPConn) {
-	for conn := range conn {
-		log.Println(conn.RemoteAddr())
-		_ = conn.Close()
-	}
 }

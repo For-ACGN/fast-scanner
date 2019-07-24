@@ -13,8 +13,8 @@ func TestScanner_Start(t *testing.T) {
 	require.Nil(t, err, err)
 	err = scanner.Start()
 	require.Nil(t, err, err)
-	for c := range scanner.Conns {
-		_ = c.Close()
+	for addr := range scanner.Address {
+		t.Log(addr)
 	}
 }
 
