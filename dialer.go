@@ -1,7 +1,7 @@
 package scanner
 
 import (
-	"fmt"
+	"context"
 	"net"
 	"os"
 	"strconv"
@@ -15,27 +15,64 @@ const (
 	maxPort = 65535
 )
 
-type laddr struct {
-	address string
-	port    uint16
-	mu      sync.Mutex
+type addr struct {
+	ip   string
+	port int
+	mu   sync.Mutex
 }
 
-func (s *Scanner) getLocalAddr() *net.TCPAddr {
-	// not set loacl address
-	if s.laddrsEnd == -1 {
+type Dialer struct {
+	timeout     time.Duration
+	laddrs      []*addr
+	laddrsEnd   int // len(laddrs) - 1
+	laddrsIndex int
+	laddrsM     sync.Mutex
+}
+
+func NewDialer(localIPs string, timeout time.Duration) (*Dialer, error) {
+	d := &Dialer{
+		timeout: timeout,
+	}
+	if localIPs != "" {
+		ips, err := GenIP(context.Background(), split(localIPs))
+		if err != nil {
+			return nil, err
+		}
+		for ip := range ips {
+			var dst string
+			if len(ip) == net.IPv4len {
+				dst = ip.String()
+			} else {
+				dst = "[" + ip.String() + "]"
+			}
+			addr := &addr{
+				ip:   dst,
+				port: minPort,
+			}
+			d.laddrs = append(d.laddrs, addr)
+		}
+		d.laddrsEnd = len(d.laddrs) - 1
+	} else {
+		d.laddrsEnd = -1
+	}
+	return d, nil
+}
+
+func (d *Dialer) getLocalAddr() *net.TCPAddr {
+	// not set loacl ip
+	if d.laddrsEnd == -1 {
 		return nil
 	}
-	s.laddrsM.Lock()
-	i := s.laddrsIndex
-	// add s.laddrIndex
-	if s.laddrsIndex == s.laddrsEnd {
-		s.laddrsIndex = 0
+	d.laddrsM.Lock()
+	i := d.laddrsIndex
+	// add d.laddrIndex
+	if d.laddrsIndex == d.laddrsEnd {
+		d.laddrsIndex = 0
 	} else {
-		s.laddrsIndex += 1
+		d.laddrsIndex += 1
 	}
-	s.laddrsM.Unlock()
-	laddr := s.laddrs[i]
+	d.laddrsM.Unlock()
+	laddr := d.laddrs[i]
 	laddr.mu.Lock()
 	port := laddr.port
 	if laddr.port == maxPort {
@@ -44,61 +81,30 @@ func (s *Scanner) getLocalAddr() *net.TCPAddr {
 		laddr.port += 1
 	}
 	laddr.mu.Unlock()
-	address := laddr.address + ":" + strconv.Itoa(int(port))
+	address := laddr.ip + ":" + strconv.Itoa(port)
 	addr, _ := net.ResolveTCPAddr("tcp", address)
 	return addr
 }
 
-func (s *Scanner) dialer(ips <-chan net.IP) {
-	defer func() {
-		s.wg.Done()
-	}()
+func (d *Dialer) Dial(network, address string) (*net.TCPConn, error) {
 	for {
-		select {
-		case <-s.ctx.Done():
-			return
-		case ip := <-ips:
-			if ip == nil {
-				return
-			}
-			for _, port := range s.ports {
-				s.dial(ip, port)
+		dialer := &net.Dialer{
+			Timeout: d.timeout,
+		}
+		laddr := d.getLocalAddr()
+		if laddr != nil {
+			dialer.LocalAddr = laddr
+		}
+		conn, err := dialer.Dial(network, address)
+		if err != nil {
+			if isLocalError(err) {
+				time.Sleep(10 * time.Millisecond)
+				continue
+			} else {
+				return nil, err
 			}
 		}
-	}
-}
-
-func (s *Scanner) dial(ip net.IP, port string) {
-	var address string
-	if len(ip) == net.IPv4len {
-		address = ip.String() + ":" + port
-	} else {
-		address = "[" + ip.String() + "]:" + port
-	}
-	for {
-		select {
-		case <-s.ctx.Done():
-			return
-		default:
-			d := &net.Dialer{
-				Timeout: s.opts.DialTimeout,
-			}
-			laddr := s.getLocalAddr()
-			if laddr != nil {
-				d.LocalAddr = laddr
-			}
-			conn, err := d.Dial("tcp", address)
-			if err != nil {
-				if isLocalError(err) {
-					time.Sleep(250 * time.Millisecond)
-					continue
-				} else {
-					return
-				}
-			}
-			s.Conns <- conn.(*net.TCPConn)
-			return
-		}
+		return conn.(*net.TCPConn), nil
 	}
 }
 
@@ -113,14 +119,13 @@ func isLocalError(err error) bool {
 		// An attempt was made to access a socket in a way
 		// forbidden by its access permissions.
 	case 10048:
-		// Only one usage of each socket address
-		// (protocol/network address/port) is normally permitted
+		// Only one usage of each socket ip
+		// (protocol/network ip/port) is normally permitted
 	case 10055:
 		// An operation on a socket could not be
 		// performed because the system lacked sufficient
 		// buffer space or because a queue was full.
 	default:
-		panic(fmt.Sprintln(int(errno), errno))
 		return false
 	}
 	return true
