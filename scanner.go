@@ -16,7 +16,7 @@ type Scanner struct {
 	opts      *Options
 	ctx       context.Context
 	cancel    func()
-	dialer    *Dialer
+	Dialer    *Dialer
 	Address   chan string
 	startOnce sync.Once
 	stopOnce  sync.Once
@@ -107,17 +107,6 @@ func (s *Scanner) Stop() {
 	})
 }
 
-func checkPort(port string) error {
-	n, err := strconv.Atoi(port)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-	if n < 1 || n > 65535 {
-		return errors.New("invalid port")
-	}
-	return nil
-}
-
 func (s *Scanner) scanner(ips <-chan net.IP) {
 	defer func() {
 		s.wg.Done()
@@ -155,4 +144,15 @@ func (s *Scanner) scan(ip net.IP, port string) {
 		return
 	case s.Address <- address:
 	}
+}
+
+func checkPort(port string) error {
+	n, err := strconv.Atoi(port)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	if n < 1 || n > 65535 {
+		return errors.New("invalid port")
+	}
+	return nil
 }
