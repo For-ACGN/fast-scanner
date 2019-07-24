@@ -75,7 +75,7 @@ func New(targets, ports string, opts *Options) (*Scanner, error) {
 	if err != nil {
 		return nil, err
 	}
-	s.dialer = dialer
+	s.Dialer = dialer
 	return &s, nil
 }
 
@@ -133,7 +133,7 @@ func (s *Scanner) scan(ip net.IP, port string) {
 	} else {
 		address = "[" + ip.String() + "]:" + port
 	}
-	conn, err := s.dialer.Dial("tcp", address)
+	conn, err := s.Dialer.Dial("tcp", address)
 	if err != nil {
 		return
 	}
