@@ -12,19 +12,10 @@ import (
 )
 
 func TestSyn(t *testing.T) {
+	time.Sleep(5 * time.Second)
 	runtime.GOMAXPROCS(16)
 
-	laddr, _ := net.ResolveIPAddr("ip", "192.168.1.200")
-	conn, err := net.ListenIP("ip4:tcp", laddr)
-	if err != nil {
-		log.Fatalln(err)
-	}
-
-	// laddr, _ = net.ResolveIPAddr("ip", "192.168.1.200")
-	conn1, err := net.ListenIP("ip4:tcp", nil)
-	if err != nil {
-		log.Fatalln(err)
-	}
+	laddr, _ := net.ResolveIPAddr("ip", "192.168.1.10")
 
 	tcpHeader := TCPHeader{
 		Source:      17663,
@@ -42,6 +33,45 @@ func TestSyn(t *testing.T) {
 	data := tcpHeader.Marshal()
 	data = append(data, []byte("xxx")...)
 
+	raddr, _ := net.ResolveIPAddr("ip", "192.168.1.62")
+
+	wgg := sync.WaitGroup{}
+
+	ssss := func() {
+		conn, err := net.ListenIP("ip4:tcp", laddr)
+		if err != nil {
+			log.Fatalln(err)
+		}
+		for i := 0; i < 10000; i++ {
+			_, err := conn.WriteTo(data, raddr)
+			if err != nil {
+				log.Fatalln(err)
+			}
+		}
+		wgg.Done()
+	}
+
+	start := time.Now()
+
+	for i := 0; i < 8; i++ {
+		wgg.Add(1)
+		go ssss()
+
+	}
+
+	wgg.Wait()
+
+	fmt.Println(time.Since(start).Seconds())
+
+	select {}
+	return
+
+	// laddr, _ = net.ResolveIPAddr("ip", "192.168.1.200")
+	conn1, err := net.ListenIP("ip4:tcp", nil)
+	if err != nil {
+		log.Fatalln(err)
+	}
+
 	ips, err := GenIP(context.Background(), []string{"123.206.0.1-123.206.1.254"})
 	if err != nil {
 		log.Fatalln(err)
@@ -53,7 +83,7 @@ func TestSyn(t *testing.T) {
 		runtime.LockOSThread()
 		for ip := range ips {
 			raddr, _ := net.ResolveIPAddr("ip", ip.String())
-			_, err := conn.WriteTo(data, raddr)
+			_, err := conn1.WriteTo(data, raddr)
 			if err != nil {
 				log.Fatalln(err)
 			}
@@ -75,7 +105,7 @@ func TestSyn(t *testing.T) {
 
 	}
 
-	start := time.Now()
+	start = time.Now()
 
 	wg.Add(2)
 	go send()
