@@ -49,7 +49,7 @@ func selectInterfaces(name string) (*Interface, error) {
 					ip := net.ParseIP(config.IPAddress[i])
 					var mask net.IPMask
 					if ip.To4() != nil { // ipv4
-						mask = net.IPMask(net.ParseIP(config.IPSubnet[i]))
+						mask = net.IPMask(net.ParseIP(config.IPSubnet[i]).To4())
 					} else { // ipv6
 						n, _ := strconv.Atoi(config.IPSubnet[i])
 						mask = net.CIDRMask(n, 128)
