@@ -2,7 +2,6 @@ package scanner
 
 import (
 	"bytes"
-	"context"
 	"encoding/binary"
 	"math"
 	"math/big"
@@ -14,126 +13,23 @@ import (
 	"github.com/pkg/errors"
 )
 
-func split(str string) []string {
-	str = strings.Replace(str, " ", "", -1)
-	return strings.Split(str, ",")
+type Generator struct {
+	N    *big.Int // host number will be generate
+	IP   chan net.IP
+	wg   sync.WaitGroup
+	once sync.Once
+	stop chan struct{}
 }
 
-func GenIP(ctx context.Context, targets []string) (<-chan net.IP, error) {
-	ctx, cancel := context.WithCancel(ctx)
-	l := len(targets)
-	ipChan := make(chan net.IP, l)
-	wg := &sync.WaitGroup{}
-	wait := func() {
-		wg.Wait()
-		close(ipChan)
-	}
-	interrupt := func() {
-		cancel()
-		wait()
-	}
-	for i := 0; i < l; i++ {
-		hyphen := strings.Index(targets[i], "-")
-		dash := strings.Index(targets[i], "/")
-		switch {
-		case hyphen+dash == -2: // single ip "192.168.1.1"
-			ip := net.ParseIP(targets[i])
-			if ip == nil {
-				interrupt()
-				return nil, errors.New("invalid ip: " + targets[i])
-			}
-			var dst net.IP
-			if i := ip.To4(); i != nil {
-				dst = i
-			} else {
-				dst = ip.To16()
-			}
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				select {
-				case ipChan <- dst:
-				case <-ctx.Done():
-					return
-				}
-			}()
-		case hyphen != -1 && dash == -1: // range "192.168.1.1-192.168.1.2"
-			ips := strings.Split(targets[i], "-")
-			if len(ips) != 2 {
-				interrupt()
-				return nil, errors.New("invalid target: " + targets[i])
-			}
-			// check is same ip type
-			startIP := net.ParseIP(ips[0])
-			stopIP := net.ParseIP(ips[1])
-			startIPType := 0 // ipv4 = 0 ipv6 = 1
-			stopIPType := 0
-			if startIP.To4() == nil {
-				if startIP.To16() != nil {
-					startIPType = 1
-				} else {
-					interrupt()
-					return nil, errors.New("invalid start ip: " + targets[i])
-				}
-			}
-			if stopIP.To4() == nil {
-				if stopIP.To16() != nil {
-					stopIPType = 1
-				} else {
-					interrupt()
-					return nil, errors.New("invalid stop ip: " + targets[i])
-				}
-			}
-			if startIPType != stopIPType {
-				interrupt()
-				return nil, errors.New("different ip type: " + targets[i])
-			}
-			// start <= stop
-			start := new(big.Int)
-			stop := new(big.Int)
-			switch startIPType {
-			case 0:
-				start.SetBytes(startIP.To4())
-				stop.SetBytes(stopIP.To4())
-			case 1:
-				start.SetBytes(startIP.To16())
-				stop.SetBytes(stopIP.To16())
-			}
-			if start.Cmp(stop) == 1 {
-				interrupt()
-				return nil, errors.New("start ip > stop ip: " + targets[i])
-			}
-			wg.Add(1)
-			go func(target string) {
-				defer func() {
-					wg.Done()
-				}()
-				genIPWithHyphen(ctx, ipChan, target)
-			}(targets[i])
-		case hyphen == -1 && dash != -1: // CIDR "192.168.1.1/24"
-			_, _, err := net.ParseCIDR(targets[i])
-			if err != nil {
-				interrupt()
-				return nil, errors.New("invalid CIDR" + targets[i])
-			}
-			wg.Add(1)
-			go func(target string) {
-				defer func() {
-					wg.Done()
-				}()
-				genIPWithDash(ctx, ipChan, target)
-			}(targets[i])
-		case hyphen != -1 && dash != -1: // "192.168.1.1-192.168.1.2/24"
-			interrupt()
-			return nil, errors.New("invalid target: " + targets[i])
-		}
-	}
-	go wait()
-	return ipChan, nil
+func (g *Generator) Close() {
+	g.once.Do(func() {
+		close(g.stop)
+	})
+	g.wg.Wait()
 }
 
 // Range
-func genIPWithHyphen(ctx context.Context, ipChan chan<- net.IP, target string) {
+func (g *Generator) genIPWithHyphen(target string) {
 	ips := strings.Split(target, "-")
 	startIP := net.ParseIP(ips[0])
 	stopIP := net.ParseIP(ips[1])
@@ -142,56 +38,79 @@ func genIPWithHyphen(ctx context.Context, ipChan chan<- net.IP, target string) {
 		// bytes to uint32
 		start := binary.BigEndian.Uint32(ipv4)
 		stop := binary.BigEndian.Uint32(stopIP.To4())
-		for {
-			select {
-			case ipChan <- net.IP(uint32ToBytes(start)):
-			case <-ctx.Done():
-				return
+		// add host number
+		g.N.Add(g.N, big.NewInt(int64(stop-start+1)))
+		// generate
+		g.wg.Add(1)
+		go func() {
+			defer g.wg.Done()
+			for {
+				select {
+				case g.IP <- net.IP(uint32ToBytes(start)):
+				case <-g.stop:
+					return
+				}
+				if start == stop {
+					return
+				}
+				start += 1
 			}
-			if start == stop {
-				return
-			}
-			start += 1
-		}
+		}()
 	} else { // ipv6
 		delta := big.NewInt(1)
 		start := new(big.Int).SetBytes(startIP.To16())
-		stop := new(big.Int).SetBytes(stopIP.To16()).Bytes()
-		for {
-			b := start.Bytes()
-			select {
-			case ipChan <- net.IP(paddingSlice16(b)):
-			case <-ctx.Done():
-				return
+		stop := new(big.Int).SetBytes(stopIP.To16())
+		stopBytes := stop.Bytes()
+		// add host number
+		g.N.Add(g.N, stop.Sub(stop, start))
+		g.N.Add(g.N, delta)
+		// generate
+		g.wg.Add(1)
+		go func() {
+			defer g.wg.Done()
+			for {
+				b := start.Bytes()
+				select {
+				case g.IP <- net.IP(paddingSlice16(b)):
+				case <-g.stop:
+					return
+				}
+				if bytes.Equal(b, stopBytes) {
+					return
+				}
+				start.Add(start, delta)
 			}
-			if bytes.Equal(b, stop) {
-				return
-			}
-			start.Add(start, delta)
-		}
+		}()
 	}
 }
 
 // CIDR
-func genIPWithDash(ctx context.Context, ipChan chan<- net.IP, target string) {
+func (g *Generator) genIPWithDash(target string) {
 	ip, ipnet, _ := net.ParseCIDR(target)
 	n, _ := strconv.Atoi(strings.Split(ipnet.String(), "/")[1])
 	if ip.To4() != nil { // ipv4
 		i := uint32(0)
 		hostNumber := uint32(math.Pow(2, float64(net.IPv4len*8-n)))
+		// add host number
+		g.N.Add(g.N, big.NewInt(int64(hostNumber)))
+		// generate
 		address := binary.BigEndian.Uint32(ipnet.IP)
-		for {
-			select {
-			case ipChan <- net.IP(uint32ToBytes(address)):
-			case <-ctx.Done():
-				return
+		g.wg.Add(1)
+		go func() {
+			defer g.wg.Done()
+			for {
+				select {
+				case g.IP <- net.IP(uint32ToBytes(address)):
+				case <-g.stop:
+					return
+				}
+				i += 1
+				if i == hostNumber {
+					return
+				}
+				address += 1
 			}
-			i += 1
-			if i == hostNumber {
-				return
-			}
-			address += 1
-		}
+		}()
 	} else { // ipv6
 		// TODO ipv6 CIDR
 		/*
@@ -215,6 +134,112 @@ func genIPWithDash(ctx context.Context, ipChan chan<- net.IP, target string) {
 			}
 		*/
 	}
+}
+
+func NewGenerator(targets []string) (*Generator, error) {
+	l := len(targets)
+	g := Generator{
+		N:    big.NewInt(0),
+		IP:   make(chan net.IP, l),
+		stop: make(chan struct{}),
+	}
+	for _, target := range targets {
+		hyphen := strings.Index(target, "-")
+		dash := strings.Index(target, "/")
+		switch {
+		case hyphen+dash == -2: // single ip "192.168.1.1"
+			ip := net.ParseIP(target)
+			if ip == nil {
+				g.Close()
+				return nil, errors.New("invalid ip: " + target)
+			}
+			var dst net.IP
+			if i := ip.To4(); i != nil {
+				dst = i
+			} else {
+				dst = ip.To16()
+			}
+			// add host number
+			g.N.Add(g.N, big.NewInt(1))
+			// generate
+			g.wg.Add(1)
+			go func() {
+				defer g.wg.Done()
+				select {
+				case g.IP <- dst:
+				case <-g.stop:
+					return
+				}
+			}()
+		case hyphen != -1 && dash == -1: // range "192.168.1.1-192.168.1.2"
+			const (
+				ipv4 = 0
+				ipv6 = 1
+			)
+			ips := strings.Split(target, "-")
+			if len(ips) != 2 {
+				g.Close()
+				return nil, errors.New("invalid target: " + target)
+			}
+			// check is same ip type
+			startIP := net.ParseIP(ips[0])
+			stopIP := net.ParseIP(ips[1])
+			startIPType := ipv4
+			stopIPType := ipv4
+			if startIP.To4() == nil {
+				if startIP.To16() != nil {
+					startIPType = ipv6
+				} else {
+					g.Close()
+					return nil, errors.New("invalid start ip: " + target)
+				}
+			}
+			if stopIP.To4() == nil {
+				if stopIP.To16() != nil {
+					stopIPType = ipv6
+				} else {
+					g.Close()
+					return nil, errors.New("invalid stop ip: " + target)
+				}
+			}
+			if startIPType != stopIPType {
+				g.Close()
+				return nil, errors.New("different ip type: " + target)
+			}
+			// check start <= stop
+			start := new(big.Int)
+			stop := new(big.Int)
+			switch startIPType {
+			case ipv4:
+				start.SetBytes(startIP.To4())
+				stop.SetBytes(stopIP.To4())
+			case ipv6:
+				start.SetBytes(startIP.To16())
+				stop.SetBytes(stopIP.To16())
+			}
+			if start.Cmp(stop) == 1 {
+				g.Close()
+				return nil, errors.New("start ip > stop ip: " + target)
+			}
+			g.genIPWithHyphen(target)
+		case hyphen == -1 && dash != -1: // CIDR "192.168.1.1/24"
+			_, _, err := net.ParseCIDR(target)
+			if err != nil {
+				g.Close()
+				return nil, errors.New("invalid CIDR" + target)
+			}
+			g.genIPWithDash(target)
+		case hyphen != -1 && dash != -1: // "192.168.1.1-192.168.1.2/24"
+			g.Close()
+			return nil, errors.New("invalid target: " + target)
+		}
+	}
+	// if all generated close ip chan
+	go func() {
+		g.wg.Wait()
+		close(g.IP)
+	}()
+	return &g, nil
 }
 
 func uint32ToBytes(n uint32) []byte {
