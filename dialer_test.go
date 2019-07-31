@@ -13,11 +13,11 @@ import (
 func TestDialer_getLocalAddr(t *testing.T) {
 	// no local ip
 	dialer, err := NewDialer("", time.Second)
-	require.Nil(t, err, err)
+	require.NoError(t, err)
 	require.Nil(t, dialer.getLocalAddr())
 	// with local ip
 	dialer, err = NewDialer("192.168.1.200", time.Second)
-	require.Nil(t, err, err)
+	require.NoError(t, err)
 	expected := bytes.Buffer{}
 	for i := 1024; i < 65536; i++ {
 		expected.WriteString("192.168.1.200:")
@@ -31,4 +31,13 @@ func TestDialer_getLocalAddr(t *testing.T) {
 		_, _ = fmt.Fprintln(actual, dialer.getLocalAddr())
 	}
 	require.True(t, expected.String() == actual.String())
+}
+
+func TestDialer_Dial(t *testing.T) {
+	dialer, err := NewDialer("192.168.1.200", time.Second)
+	require.NoError(t, err)
+	_, err = dialer.Dial("tcp", "8.8.8.8:53")
+	require.NoError(t, err)
+	_, err = dialer.Dial("tcp", "169.254.1.1:53")
+	require.Error(t, err)
 }

@@ -1,7 +1,6 @@
 package scanner
 
 import (
-	"context"
 	"net"
 	"os"
 	"strconv"
@@ -34,11 +33,11 @@ func NewDialer(localIPs string, timeout time.Duration) (*Dialer, error) {
 		timeout: timeout,
 	}
 	if localIPs != "" {
-		ips, err := GenIP(context.Background(), split(localIPs))
+		g, err := NewGenerator(split(localIPs))
 		if err != nil {
 			return nil, err
 		}
-		for ip := range ips {
+		for ip := range g.IP {
 			var dst string
 			if len(ip) == net.IPv4len {
 				dst = ip.String()
