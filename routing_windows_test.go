@@ -8,7 +8,7 @@ import (
 )
 
 func TestRoute(t *testing.T) {
-	iface, err := selectInterface("Ethernet0")
+	iface, err := selectInterface("")
 	require.NoError(t, err)
 	route, err := newRouter(iface)
 	require.NoError(t, err)
