@@ -8,7 +8,7 @@ import (
 	"github.com/StackExchange/wmi"
 )
 
-func selectInterfaces(name string) (*Interface, error) {
+func selectInterface(name string) (*Interface, error) {
 	type Win32NetworkAdapter struct {
 		NetConnectionID string
 		GUID            string // GUID=SettingID

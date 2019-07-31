@@ -7,7 +7,7 @@ import (
 )
 
 func TestSelectInterfaces(t *testing.T) {
-	iface, err := selectInterfaces("Ethernet0")
+	iface, err := selectInterface("Ethernet0")
 	require.Nil(t, err)
 	t.Log(iface)
 }

@@ -6,7 +6,7 @@ import (
 	"github.com/google/gopacket/pcap"
 )
 
-func selectInterfaces(names []string) ([]*pcap.Interface, error) {
+func selectInterface(name string) (*Interface, error) {
 	ifs, err := pcap.FindAllDevs()
 	if err != nil {
 		return nil, err
