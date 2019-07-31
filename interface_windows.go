@@ -1,6 +1,7 @@
 package scanner
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"strconv"
@@ -8,6 +9,7 @@ import (
 	"github.com/StackExchange/wmi"
 )
 
+// if name is "" select the first interface
 func selectInterface(name string) (*Interface, error) {
 	type Win32NetworkAdapter struct {
 		NetConnectionID string
@@ -18,6 +20,9 @@ func selectInterface(name string) (*Interface, error) {
 	err := wmi.Query(q, &adapters)
 	if err != nil {
 		return nil, err
+	}
+	if len(adapters) == 0 {
+		return nil, errors.New("no adapter")
 	}
 	type Win32NetworkAdapterConfiguration struct {
 		SettingID        string
@@ -67,9 +72,12 @@ func selectInterface(name string) (*Interface, error) {
 			}
 		}
 	}
-	i := ifaces[name]
-	if i == nil {
+	if name == "" {
+		return ifaces[adapters[0].NetConnectionID], nil
+	}
+	if iface, ok := ifaces[name]; ok {
+		return iface, nil
+	} else {
 		return nil, fmt.Errorf("interface: %s doesn't exist", name)
 	}
-	return i, nil
 }
