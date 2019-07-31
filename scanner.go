@@ -1,45 +1,56 @@
 package scanner
 
 import (
-	"context"
-	"net"
+	"math/big"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/pkg/errors"
 )
 
+var (
+	buffer = 128 * runtime.NumCPU()
+)
+
 type Scanner struct {
-	targets   []string
-	ports     []string
-	opts      *Options
-	ctx       context.Context
-	cancel    func()
-	Dialer    *Dialer
-	Address   chan string
-	startOnce sync.Once
-	stopOnce  sync.Once
-	wg        sync.WaitGroup
+	method      string
+	targets     []string
+	ports       []string
+	opts        *Options
+	generator   *Generator
+	dialer      *Dialer // for connect
+	hostNum     *big.Int
+	tokenBucket chan struct{} // for rate
+	Address     chan string
+	startOnce   sync.Once
+	stopOnce    sync.Once
+	stopSignal  chan struct{}
+	wg          sync.WaitGroup
 }
 
 func New(targets, ports string, opts *Options) (*Scanner, error) {
 	if targets == "" {
-		return nil, errors.New("no targets")
+		return nil, errors.New("no target")
 	}
 	if ports == "" {
-		return nil, errors.New("no ports")
+		return nil, errors.New("no port")
 	}
 	if opts == nil {
 		opts = new(Options)
 	}
 	opts.apply()
 	s := Scanner{
-		targets: split(targets),
-		opts:    opts,
-		Address: make(chan string, 128*opts.Goroutines),
+		method:      opts.Method,
+		targets:     split(targets),
+		opts:        opts,
+		tokenBucket: make(chan struct{}, buffer),
+		Address:     make(chan string, buffer),
+		stopSignal:  make(chan struct{}),
 	}
-	// add port
+	// set ports
 	for _, port := range split(ports) {
 		ports := strings.Split(port, "-")
 		if len(ports) == 1 { // single port
@@ -71,30 +82,56 @@ func New(targets, ports string, opts *Options) (*Scanner, error) {
 			}
 		}
 	}
-	dialer, err := NewDialer(opts.LocalIP, opts.Timeout)
-	if err != nil {
-		return nil, err
-	}
-	s.Dialer = dialer
+
 	return &s, nil
 }
 
 func (s *Scanner) Start() error {
 	var err error
 	s.startOnce.Do(func() {
-		var ips <-chan net.IP
-		s.ctx, s.cancel = context.WithCancel(context.Background())
-		ips, err = GenIP(s.ctx, s.targets)
+		s.generator, err = NewGenerator(s.targets)
 		if err != nil {
 			return
 		}
-		for i := 0; i < s.opts.Goroutines; i++ {
-			s.wg.Add(1)
-			go s.scanner(ips)
+		// calculate host number
+		n := s.generator.N
+		s.hostNum = n.Mul(n, big.NewInt(int64(len(s.ports))))
+		go s.addTokenLoop()
+		switch s.method {
+		case MethodSYN:
+
+		case MethodConnect:
+			var localIPs []string
+			if s.opts.Device != "" {
+				iface, e := selectInterface(s.opts.Device)
+				if e != nil {
+					err = e
+					return
+				}
+				l := len(iface.IPNets)
+				localIPs = make([]string, l)
+				for i := 0; i < l; i++ {
+					localIPs[i] = iface.IPNets[i].IP.String()
+				}
+			}
+			s.dialer, err = NewDialer(localIPs, s.opts.Timeout)
+			if err != nil {
+				return
+			}
+			workers := 512 * runtime.NumCPU()
+			for i := 0; i < workers; i++ {
+				s.wg.Add(1)
+				go s.connectScanner()
+			}
+		default:
+			err = errors.New("invalid method")
 		}
 		go func() {
 			s.wg.Wait()
 			close(s.Address)
+			s.stopOnce.Do(func() {
+				close(s.stopSignal)
+			})
 		}()
 	})
 	return err
@@ -102,47 +139,28 @@ func (s *Scanner) Start() error {
 
 func (s *Scanner) Stop() {
 	s.stopOnce.Do(func() {
-		s.cancel()
+		s.generator.Close()
+		close(s.stopSignal)
 		s.wg.Wait()
 	})
 }
 
-func (s *Scanner) scanner(ips <-chan net.IP) {
-	defer func() {
-		s.wg.Done()
-	}()
+func (s *Scanner) addTokenLoop() {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
 	for {
 		select {
-		case <-s.ctx.Done():
+		case <-ticker.C:
+			for i := 0; i < s.opts.Rate; i++ {
+				select {
+				case s.tokenBucket <- struct{}{}:
+				case <-s.stopSignal:
+					return
+				}
+			}
+		case <-s.stopSignal:
 			return
-		case ip := <-ips:
-			if ip == nil {
-				return
-			}
-			for _, port := range s.ports {
-				s.scan(ip, port)
-			}
 		}
-	}
-}
-
-func (s *Scanner) scan(ip net.IP, port string) {
-	var address string
-	if len(ip) == net.IPv4len {
-		address = ip.String() + ":" + port
-	} else {
-		address = "[" + ip.String() + "]:" + port
-	}
-	conn, err := s.Dialer.Dial("tcp", address)
-	if err != nil {
-		return
-	}
-	address = conn.RemoteAddr().String()
-	_ = conn.Close()
-	select {
-	case <-s.ctx.Done():
-		return
-	case s.Address <- address:
 	}
 }
 

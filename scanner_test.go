@@ -8,23 +8,25 @@ import (
 )
 
 func TestScanner_Start(t *testing.T) {
-	host, port, _ := net.SplitHostPort(testListener(t))
-	scanner, err := New(host, port, nil)
-	require.Nil(t, err, err)
-	err = scanner.Start()
-	require.Nil(t, err, err)
-	for addr := range scanner.Address {
+	for addr := range testnewScanner(t).Address {
 		t.Log(addr)
 	}
 }
 
 func TestScanner_Stop(t *testing.T) {
-	host, port, _ := net.SplitHostPort(testListener(t))
-	scanner, err := New(host, port, nil)
-	require.Nil(t, err, err)
-	err = scanner.Start()
-	require.Nil(t, err, err)
-	scanner.Stop()
+	testnewScanner(t).Stop()
+}
+
+func testnewScanner(t *testing.T) *Scanner {
+	_, port, _ := net.SplitHostPort(testListener(t))
+	iface, err := selectInterface("")
+	require.NoError(t, err)
+	host := iface.IPNets[0].IP.String()
+	s, err := New(host, port, &Options{Method: MethodConnect})
+	require.NoError(t, err)
+	err = s.Start()
+	require.NoError(t, err)
+	return s
 }
 
 func testListener(t *testing.T) string {
@@ -39,7 +41,6 @@ func testListener(t *testing.T) string {
 				return
 			}
 			go func(conn net.Conn) {
-				_, _ = conn.Read(make([]byte, 1024))
 				_ = conn.Close()
 			}(conn)
 		}
