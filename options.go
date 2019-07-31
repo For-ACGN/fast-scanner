@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"runtime"
+	"strings"
 	"time"
 )
 
@@ -18,4 +19,9 @@ func (opt *Options) apply() {
 	if opt.Timeout < 1 {
 		opt.Timeout = 3 * time.Second
 	}
+}
+
+func split(str string) []string {
+	str = strings.Replace(str, " ", "", -1)
+	return strings.Split(str, ",")
 }
