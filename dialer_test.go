@@ -2,7 +2,6 @@ package scanner
 
 import (
 	"bytes"
-	"fmt"
 	"net"
 	"strconv"
 	"testing"
@@ -34,8 +33,8 @@ func TestDialer_getLocalAddr(t *testing.T) {
 	expected.WriteString("[2606::1]:1024\n")
 	actual := &bytes.Buffer{}
 	for i := 0; i < 65536-1024+1; i++ {
-		_, _ = fmt.Fprintln(actual, dialer.getLocalAddrv4())
-		_, _ = fmt.Fprintln(actual, dialer.getLocalAddrv6())
+		actual.WriteString(dialer.getLocalAddrv4().String() + "\n")
+		actual.WriteString(dialer.getLocalAddrv6().String() + "\n")
 	}
 	require.True(t, expected.String() == actual.String())
 }
