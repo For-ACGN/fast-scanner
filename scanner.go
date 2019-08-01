@@ -21,8 +21,11 @@ type Scanner struct {
 	ports       []string
 	opts        *Options
 	generator   *Generator
-	dialer      *Dialer // for connect
 	hostNum     *big.Int
+	scannedNum  *big.Int
+	delta       *big.Int
+	numMutex    sync.Mutex
+	dialer      *Dialer       // for connect
 	tokenBucket chan struct{} // for rate
 	Address     chan string
 	startOnce   sync.Once
@@ -47,6 +50,7 @@ func New(targets, ports string, opts *Options) (*Scanner, error) {
 		targets:     split(targets),
 		opts:        opts,
 		tokenBucket: make(chan struct{}, buffer),
+		delta:       big.NewInt(1),
 		Address:     make(chan string, buffer),
 		stopSignal:  make(chan struct{}),
 	}
@@ -162,6 +166,26 @@ func (s *Scanner) addTokenLoop() {
 			return
 		}
 	}
+}
+
+func (s *Scanner) addScanned() {
+	s.numMutex.Lock()
+	s.scannedNum.Add(s.scannedNum, s.delta)
+	s.numMutex.Unlock()
+}
+
+func (s *Scanner) HostNumber() *big.Int {
+	n := big.Int{}
+	n.SetBytes(s.hostNum.Bytes())
+	return &n
+}
+
+func (s *Scanner) ScannedNumber() *big.Int {
+	n := big.Int{}
+	s.numMutex.Lock()
+	n.SetBytes(s.scannedNum.Bytes())
+	s.numMutex.Unlock()
+	return &n
 }
 
 func checkPort(port string) error {
