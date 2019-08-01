@@ -18,30 +18,26 @@ func (s *Scanner) connectScanner() {
 				case <-s.stopSignal:
 					return
 				}
-				s.connect(ip, port)
+				// scan
+				var address string
+				if len(ip) == net.IPv4len {
+					address = ip.String() + ":" + port
+				} else {
+					address = "[" + ip.String() + "]:" + port
+				}
+				address, err := s.dialer.Dial("tcp", address)
+				if err != nil {
+					s.addScanned()
+					return
+				}
+				select {
+				case <-s.stopSignal:
+				case s.Address <- address:
+					s.addScanned()
+				}
 			}
 		case <-s.stopSignal:
 			return
 		}
-	}
-}
-
-func (s *Scanner) connect(ip net.IP, port string) {
-	var address string
-	if len(ip) == net.IPv4len {
-		address = ip.String() + ":" + port
-	} else {
-		address = "[" + ip.String() + "]:" + port
-	}
-	address, err := s.dialer.Dial("tcp", address)
-	if err != nil {
-		s.addScanned()
-		return
-	}
-	select {
-	case <-s.stopSignal:
-		return
-	case s.Address <- address:
-		s.addScanned()
 	}
 }
