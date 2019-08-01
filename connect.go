@@ -35,11 +35,13 @@ func (s *Scanner) connect(ip net.IP, port string) {
 	}
 	address, err := s.dialer.Dial("tcp", address)
 	if err != nil {
+		s.addScanned()
 		return
 	}
 	select {
 	case <-s.stopSignal:
 		return
 	case s.Address <- address:
+		s.addScanned()
 	}
 }
