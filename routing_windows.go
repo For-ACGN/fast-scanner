@@ -22,12 +22,12 @@ func (r *route) route(dst net.IP) (gateway, preferredSrc net.IP, err error) {
 		err = errors.New("invalid ip")
 		return
 	}
-	// check is LAN
 	if dst.To4() != nil {
 		if len(r.ipv4Nets) == 0 {
 			err = errors.New("no ipv4 net")
 			return
 		}
+		// check is LAN
 		for _, ipnet := range r.ipv4Nets {
 			if ipnet.Contains(dst) {
 				preferredSrc = ipnet.IP
@@ -45,6 +45,7 @@ func (r *route) route(dst net.IP) (gateway, preferredSrc net.IP, err error) {
 			err = errors.New("no ipv6 net")
 			return
 		}
+		// check is LAN
 		for _, ipnet := range r.ipv6Nets {
 			if ipnet.Contains(dst) {
 				preferredSrc = ipnet.IP
@@ -79,16 +80,20 @@ func newRouter(iface *Interface) (*route, error) {
 	for _, ipnet := range iface.IPNets {
 		switch len(ipnet.Mask) {
 		case net.IPv4len:
+			ipnet.IP = ipnet.IP.To4()
 			r.ipv4Nets = append(r.ipv4Nets, ipnet)
 		case net.IPv6len:
+			ipnet.IP = ipnet.IP.To16()
 			r.ipv6Nets = append(r.ipv6Nets, ipnet)
 		}
 	}
 	for i := 0; i < len(iface.Gateways); i++ {
-		if iface.Gateways[i].To4() != nil { // ipv4
-			r.ipv4Gateway[&iface.Gateways[i]] = struct{}{}
+		g := iface.Gateways[i].To4()
+		if g != nil { // ipv4
+			r.ipv4Gateway[&g] = struct{}{}
 		} else { // ipv6
-			r.ipv6Gateway[&iface.Gateways[i]] = struct{}{}
+			g := iface.Gateways[i].To16()
+			r.ipv6Gateway[&g] = struct{}{}
 		}
 	}
 	return r, nil
