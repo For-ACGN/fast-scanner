@@ -2,6 +2,8 @@ package scanner
 
 import (
 	"math/big"
+	"math/rand"
+	"net"
 	"runtime"
 	"strconv"
 	"strings"
@@ -24,8 +26,14 @@ type Scanner struct {
 	hostNum     *big.Int
 	scannedNum  *big.Int
 	delta       *big.Int
-	numMutex    sync.Mutex
-	dialer      *Dialer       // for connect
+	numMu       sync.Mutex
+	dialer      *Dialer    // for connect and syn
+	iface       *Interface // for syn
+	route       *route
+	salt        []byte
+	packetChan  chan []byte
+	gatewayMACs map[string]net.HardwareAddr
+	gatewayMu   sync.Mutex
 	tokenBucket chan struct{} // for rate
 	Address     chan string
 	startOnce   sync.Once
@@ -50,6 +58,7 @@ func New(targets, ports string, opts *Options) (*Scanner, error) {
 		targets:     split(targets),
 		opts:        opts,
 		tokenBucket: make(chan struct{}, buffer),
+		scannedNum:  big.NewInt(0),
 		delta:       big.NewInt(1),
 		Address:     make(chan string, buffer),
 		stopSignal:  make(chan struct{}),
@@ -86,7 +95,6 @@ func New(targets, ports string, opts *Options) (*Scanner, error) {
 			}
 		}
 	}
-
 	return &s, nil
 }
 
@@ -100,16 +108,71 @@ func (s *Scanner) Start() error {
 		// calculate host number
 		n := s.generator.N
 		s.hostNum = n.Mul(n, big.NewInt(int64(len(s.ports))))
+		// token bucket
 		go s.addTokenLoop()
+		handleErr := func(e error) {
+			s.Stop()
+			err = e
+		}
 		switch s.method {
 		case MethodSYN:
+			if initErr != nil {
+				handleErr(initErr)
+				return
+			}
+			s.iface, err = selectInterface(s.opts.Device)
+			if err != nil {
+				handleErr(err)
+				return
+			}
+			s.route, err = newRouter(s.iface)
+			if err != nil {
+				handleErr(err)
+				return
+			}
+			s.packetChan = make(chan []byte, 1024*runtime.NumCPU())
+			s.gatewayMACs = make(map[string]net.HardwareAddr, 2)
+			workers := 1 // 4 * runtime.NumCPU()
+			errChan := make(chan error, workers)
+			// init salt for validate
+			random := rand.New(rand.NewSource(time.Now().UnixNano()))
+			s.salt = make([]byte, 16)
+			for i := 0; i < 16; i++ {
+				s.salt[0] = byte(random.Intn(256))
+			}
+			s.wg.Add(1)
+			go func() {
+				for _, port := range s.ports {
+					// init listener
+					go s.synCapturer(port, errChan)
+					e := <-errChan
+					if e != nil {
+						handleErr(e)
+						return
+					}
+					// init scanner
+					for i := 0; i < workers; i++ {
+						s.wg.Add(1)
+						go s.synScanner(port, errChan)
+					}
+					for i := 0; i < workers; i++ {
+						e = <-errChan
+						if e != nil {
+							handleErr(e)
+							return
+						}
+					}
+					go s.synParser(port)
+				}
+			}()
 
+			// close(errChan)
 		case MethodConnect:
 			var localIPs []string
 			if s.opts.Device != "" {
 				iface, e := selectInterface(s.opts.Device)
 				if e != nil {
-					err = e
+					handleErr(e)
 					return
 				}
 				l := len(iface.IPNets)
@@ -120,6 +183,7 @@ func (s *Scanner) Start() error {
 			}
 			s.dialer, err = NewDialer(localIPs, s.opts.Timeout)
 			if err != nil {
+				handleErr(err)
 				return
 			}
 			workers := 512 * runtime.NumCPU()
@@ -128,7 +192,7 @@ func (s *Scanner) Start() error {
 				go s.connectScanner()
 			}
 		default:
-			err = errors.New("invalid method")
+			handleErr(errors.New("invalid method"))
 		}
 		go func() {
 			s.wg.Wait()
@@ -169,9 +233,9 @@ func (s *Scanner) addTokenLoop() {
 }
 
 func (s *Scanner) addScanned() {
-	s.numMutex.Lock()
+	s.numMu.Lock()
 	s.scannedNum.Add(s.scannedNum, s.delta)
-	s.numMutex.Unlock()
+	s.numMu.Unlock()
 }
 
 func (s *Scanner) HostNumber() *big.Int {
@@ -182,9 +246,9 @@ func (s *Scanner) HostNumber() *big.Int {
 
 func (s *Scanner) ScannedNumber() *big.Int {
 	n := big.Int{}
-	s.numMutex.Lock()
+	s.numMu.Lock()
 	n.SetBytes(s.scannedNum.Bytes())
-	s.numMutex.Unlock()
+	s.numMu.Unlock()
 	return &n
 }
 
