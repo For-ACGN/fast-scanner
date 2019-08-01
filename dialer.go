@@ -1,6 +1,7 @@
 package scanner
 
 import (
+	"errors"
 	"net"
 	"os"
 	"strconv"
@@ -123,17 +124,30 @@ func (d *Dialer) getLocalAddrv6() *net.TCPAddr {
 
 func (d *Dialer) Dial(network, address string) (string, error) {
 	for {
+		raddr, err := net.ResolveTCPAddr(network, address)
+		if err != nil {
+			return "", err
+		}
+		ip := raddr.IP
+		if ip.Equal(net.IPv4bcast) ||
+			ip.IsUnspecified() ||
+			ip.IsMulticast() ||
+			ip.IsLinkLocalUnicast() {
+			return "", errors.New("invalid ip")
+		}
 		dialer := &net.Dialer{
 			Timeout: d.timeout,
 		}
-		var laddr *net.TCPAddr
-		if strings.Index(address, "[") == -1 { // ipv4
-			laddr = d.getLocalAddrv4()
-		} else {
-			laddr = d.getLocalAddrv6()
-		}
-		if laddr != nil {
-			dialer.LocalAddr = laddr
+		if !ip.IsLoopback() {
+			var laddr *net.TCPAddr
+			if strings.Index(address, "[") == -1 { // ipv4
+				laddr = d.getLocalAddrv4()
+			} else {
+				laddr = d.getLocalAddrv6()
+			}
+			if laddr != nil {
+				dialer.LocalAddr = laddr
+			}
 		}
 		conn, err := dialer.Dial(network, address)
 		if err != nil {
