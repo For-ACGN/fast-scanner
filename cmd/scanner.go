@@ -13,30 +13,34 @@ import (
 
 func main() {
 	var (
-		targets    string
-		ports      string
-		localIPs   string
-		goroutines int
-		timeout    time.Duration
-		save       string
+		targets string
+		ports   string
+		method  string
+		device  string
+		rate    int
+		timeout time.Duration
+		workers int
+		save    string
 	)
 	targetsUsage := bytes.Buffer{}
 	targetsUsage.WriteString("192.168.1.1, fe80::1, ")
 	targetsUsage.WriteString("192.168.1.1-192.168.1.3, fe80::1-fe80::1, ")
 	targetsUsage.WriteString("192.168.1.1/24")
 	flag.StringVar(&targets, "targets", "127.0.0.1", targetsUsage.String())
-	portsUsage := "80, 80-82"
-	flag.StringVar(&ports, "ports", "80", portsUsage)
-	localAddrsUsage := "192.168.1.1, fe80::1"
-	flag.StringVar(&localIPs, "local", "", localAddrsUsage)
-	flag.IntVar(&goroutines, "goroutines", 0, "")
-	flag.DurationVar(&timeout, "timeout", 0, "")
-	flag.StringVar(&save, "save", "", "")
+	flag.StringVar(&ports, "ports", "80", "80, 80-82")
+	flag.StringVar(&method, "method", scanner.MethodSYN, "connect or syn")
+	flag.StringVar(&device, "device", "", "interface name Ethernet0, eth0")
+	flag.IntVar(&rate, "rate", 1000, "packet send per second")
+	flag.DurationVar(&timeout, "timeout", 10*time.Second, "timeout")
+	flag.IntVar(&workers, "workers", 0, "scanner number. usually don't need set")
+	flag.StringVar(&save, "save", "", "save scan result")
 	flag.Parse()
 	opts := &scanner.Options{
-		LocalIP:    localIPs,
-		Goroutines: goroutines,
-		Timeout:    timeout,
+		Method:  method,
+		Device:  device,
+		Rate:    rate,
+		Timeout: timeout,
+		Workers: workers,
 	}
 	if save != "" {
 		file, err := os.OpenFile(save, os.O_CREATE|os.O_APPEND, 644)
@@ -61,10 +65,12 @@ func main() {
 		s.Stop()
 		log.Print("stop scanner\r\n")
 	}()
+	var scanned int
 	for addr := range s.Address {
+		scanned += 1
 		log.Print(addr + "\r\n")
 	}
-	log.Print("scan finished\r\n")
+	log.Printf("scan finished. total: %d\r\n", scanned)
 }
 
 type logger struct {
