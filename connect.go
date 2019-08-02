@@ -28,7 +28,7 @@ func (s *Scanner) connectScanner() {
 				address, err := s.dialer.Dial("tcp", address)
 				if err != nil {
 					s.addScanned()
-					return
+					continue
 				}
 				select {
 				case <-s.stopSignal:
