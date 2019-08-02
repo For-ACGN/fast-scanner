@@ -4,6 +4,7 @@ import (
 	"math/big"
 	"math/rand"
 	"net"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -15,7 +16,7 @@ import (
 type Scanner struct {
 	method      string
 	targets     []string
-	ports       []string
+	ports       map[string]struct{}
 	opts        *Options
 	generator   *Generator
 	hostNum     *big.Int
@@ -51,6 +52,7 @@ func New(targets, ports string, opts *Options) (*Scanner, error) {
 	s := Scanner{
 		method:      opts.Method,
 		targets:     split(targets),
+		ports:       make(map[string]struct{}, 1),
 		opts:        opts,
 		tokenBucket: make(chan struct{}, 16*opts.Workers),
 		scannedNum:  big.NewInt(0),
@@ -66,7 +68,7 @@ func New(targets, ports string, opts *Options) (*Scanner, error) {
 			if err != nil {
 				return nil, err
 			}
-			s.ports = append(s.ports, ports[0])
+			s.ports[ports[0]] = struct{}{}
 		} else { // with "-"
 			err := checkPort(ports[0])
 			if err != nil {
@@ -78,11 +80,11 @@ func New(targets, ports string, opts *Options) (*Scanner, error) {
 			}
 			start, _ := strconv.Atoi(ports[0])
 			stop, _ := strconv.Atoi(ports[1])
-			if stop > start {
+			if start > stop {
 				return nil, errors.New("invalid port: " + port)
 			}
 			for {
-				s.ports = append(s.ports, strconv.Itoa(start))
+				s.ports[strconv.Itoa(start)] = struct{}{}
 				if start == stop {
 					break
 				}
@@ -104,68 +106,80 @@ func (s *Scanner) Start() error {
 		n := s.generator.N
 		s.hostNum = n.Mul(n, big.NewInt(int64(len(s.ports))))
 		// token bucket
-		go s.addTokenLoop()
-		handleErr := func(e error) {
-			s.Stop()
-			err = e
-		}
+		go s.addTokenLoop() // not set wg
 		switch s.method {
 		case MethodSYN:
 			if initErr != nil {
-				handleErr(initErr)
+				err = initErr
+				s.Stop()
 				return
 			}
 			s.iface, err = selectInterface(s.opts.Device)
 			if err != nil {
-				handleErr(err)
+				s.Stop()
 				return
 			}
 			s.route, err = newRouter(s.iface)
 			if err != nil {
-				handleErr(err)
+				s.Stop()
 				return
 			}
 			s.packetChan = make(chan []byte, 1024*s.opts.Workers)
 			s.gatewayMACs = make(map[string]net.HardwareAddr, 2)
-			errChan := make(chan error, s.opts.Workers)
 			// init salt for validate
 			random := rand.New(rand.NewSource(time.Now().UnixNano()))
 			s.salt = make([]byte, 16)
 			for i := 0; i < 16; i++ {
 				s.salt[0] = byte(random.Intn(256))
 			}
+			// init capturer
+			closeCapturer, e := s.synCapturer()
+			if e != nil {
+				err = e
+				s.Stop()
+				return
+			}
+			// start parser
+			parserWG := new(sync.WaitGroup)
+			for i := 0; i < runtime.NumCPU(); i++ {
+				parserWG.Add(1)
+				go s.synParser(parserWG)
+			}
+			// wait to prepare read
+			time.Sleep(250 * time.Millisecond)
+			// start scanner
+			scannerWG := new(sync.WaitGroup)
+			for i := 0; i < s.opts.Workers; i++ {
+				// scannerWG.Add(1) is in function
+				err = s.synScanner(scannerWG)
+				if err != nil {
+					closeCapturer()
+					parserWG.Wait()
+					s.Stop()
+					return
+				}
+			}
 			s.wg.Add(1)
 			go func() {
-				for _, port := range s.ports {
-					// init listener
-					go s.synCapturer(port, errChan)
-					e := <-errChan
-					if e != nil {
-						handleErr(e)
-						return
-					}
-					// init scanner
-					for i := 0; i < s.opts.Workers; i++ {
-						s.wg.Add(1)
-						go s.synScanner(port, errChan)
-					}
-					for i := 0; i < s.opts.Workers; i++ {
-						e = <-errChan
-						if e != nil {
-							handleErr(e)
-							return
-						}
-					}
-					go s.synParser(port)
+				// wait scanner
+				scannerWG.Wait()
+				select {
+				case <-s.stopSignal: // stop
+				default: // send finish
+					time.Sleep(s.opts.Timeout)
 				}
+				// close capturer
+				closeCapturer()
+				parserWG.Wait()
+				s.wg.Done()
 			}()
-			// close(errChan)
 		case MethodConnect:
 			var localIPs []string
 			if s.opts.Device != "" {
 				iface, e := selectInterface(s.opts.Device)
 				if e != nil {
-					handleErr(e)
+					err = e
+					s.Stop()
 					return
 				}
 				l := len(iface.IPNets)
@@ -176,7 +190,7 @@ func (s *Scanner) Start() error {
 			}
 			s.dialer, err = NewDialer(localIPs, s.opts.Timeout)
 			if err != nil {
-				handleErr(err)
+				s.Stop()
 				return
 			}
 			for i := 0; i < s.opts.Workers; i++ {
@@ -184,8 +198,11 @@ func (s *Scanner) Start() error {
 				go s.connectScanner()
 			}
 		default:
-			handleErr(errors.New("invalid method"))
+			err = errors.New("invalid method")
+			s.Stop()
+			return
 		}
+		// wait to finish
 		go func() {
 			s.wg.Wait()
 			close(s.Address)
@@ -205,6 +222,7 @@ func (s *Scanner) Stop() {
 	})
 }
 
+// auto return
 func (s *Scanner) addTokenLoop() {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
