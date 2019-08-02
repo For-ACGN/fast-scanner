@@ -4,17 +4,12 @@ import (
 	"math/big"
 	"math/rand"
 	"net"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/pkg/errors"
-)
-
-var (
-	buffer = 128 * runtime.NumCPU()
 )
 
 type Scanner struct {
@@ -57,10 +52,10 @@ func New(targets, ports string, opts *Options) (*Scanner, error) {
 		method:      opts.Method,
 		targets:     split(targets),
 		opts:        opts,
-		tokenBucket: make(chan struct{}, buffer),
+		tokenBucket: make(chan struct{}, 16*opts.Workers),
 		scannedNum:  big.NewInt(0),
 		delta:       big.NewInt(1),
-		Address:     make(chan string, buffer),
+		Address:     make(chan string, 16*opts.Workers),
 		stopSignal:  make(chan struct{}),
 	}
 	// set ports
@@ -130,10 +125,9 @@ func (s *Scanner) Start() error {
 				handleErr(err)
 				return
 			}
-			s.packetChan = make(chan []byte, 1024*runtime.NumCPU())
+			s.packetChan = make(chan []byte, 1024*s.opts.Workers)
 			s.gatewayMACs = make(map[string]net.HardwareAddr, 2)
-			workers := 1 // 4 * runtime.NumCPU()
-			errChan := make(chan error, workers)
+			errChan := make(chan error, s.opts.Workers)
 			// init salt for validate
 			random := rand.New(rand.NewSource(time.Now().UnixNano()))
 			s.salt = make([]byte, 16)
@@ -151,11 +145,11 @@ func (s *Scanner) Start() error {
 						return
 					}
 					// init scanner
-					for i := 0; i < workers; i++ {
+					for i := 0; i < s.opts.Workers; i++ {
 						s.wg.Add(1)
 						go s.synScanner(port, errChan)
 					}
-					for i := 0; i < workers; i++ {
+					for i := 0; i < s.opts.Workers; i++ {
 						e = <-errChan
 						if e != nil {
 							handleErr(e)
@@ -165,7 +159,6 @@ func (s *Scanner) Start() error {
 					go s.synParser(port)
 				}
 			}()
-
 			// close(errChan)
 		case MethodConnect:
 			var localIPs []string
@@ -186,8 +179,7 @@ func (s *Scanner) Start() error {
 				handleErr(err)
 				return
 			}
-			workers := 512 * runtime.NumCPU()
-			for i := 0; i < workers; i++ {
+			for i := 0; i < s.opts.Workers; i++ {
 				s.wg.Add(1)
 				go s.connectScanner()
 			}

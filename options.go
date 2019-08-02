@@ -1,6 +1,7 @@
 package scanner
 
 import (
+	"runtime"
 	"strings"
 	"time"
 )
@@ -15,6 +16,7 @@ type Options struct {
 	Device  string
 	Rate    int
 	Timeout time.Duration
+	Workers int
 }
 
 func (opt *Options) apply() {
@@ -26,6 +28,14 @@ func (opt *Options) apply() {
 	}
 	if opt.Timeout < 1 {
 		opt.Timeout = 10 * time.Second
+	}
+	if opt.Workers < 1 {
+		switch opt.Method {
+		case MethodConnect:
+			opt.Workers = 512 * runtime.NumCPU()
+		case MethodSYN:
+			opt.Workers = 8 * runtime.NumCPU()
+		}
 	}
 }
 
