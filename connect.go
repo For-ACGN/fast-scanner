@@ -12,7 +12,7 @@ func (s *Scanner) connectScanner() {
 			if ip == nil {
 				return
 			}
-			for _, port := range s.ports {
+			for port := range s.ports {
 				select {
 				case <-s.tokenBucket:
 				case <-s.stopSignal:
