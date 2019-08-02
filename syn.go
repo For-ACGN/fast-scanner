@@ -2,9 +2,9 @@ package scanner
 
 import (
 	"errors"
-	"fmt"
 	"net"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/google/gopacket"
@@ -16,17 +16,84 @@ const (
 	snaplen = 65536
 )
 
-func (s *Scanner) synScanner(port string, errChan chan<- error) {
-	// defer s.wg.Done()
+func (s *Scanner) synCapturer() (func(), error) {
 	handle, err := pcap.OpenLive(s.iface.Device, snaplen, false, pcap.BlockForever)
 	if err != nil {
-		errChan <- err
-		return
+		return nil, err
 	}
-	defer handle.Close()
-	errChan <- nil
+	// tcp.flags.syn == 1 and tcp.flags.ack == 1
+	_ = handle.SetBPFFilter("tcp[13] = 0x12")
+	go func() {
+		defer close(s.packetChan) // synParser will close
+		for {
+			data, _, err := handle.ZeroCopyReadPacketData()
+			if err != nil {
+				return
+			}
+			d := make([]byte, len(data))
+			copy(d, data)
+			s.packetChan <- d
+		}
+	}()
+	go func() {
+		<-s.stopSignal
+		handle.Close()
+	}()
+	return handle.Close, nil
+}
+
+func (s *Scanner) synParser(wg *sync.WaitGroup) {
+	defer wg.Done()
+	var (
+		err     error
+		data    []byte
+		eth     layers.Ethernet
+		ipv4    layers.IPv4
+		ipv6    layers.IPv6
+		tcp     layers.TCP
+		decoded []gopacket.LayerType
+	)
+	parser := gopacket.NewDecodingLayerParser(layers.LayerTypeEthernet,
+		&eth, &ipv4, &ipv6, &tcp)
+	for data = range s.packetChan {
+		err = parser.DecodeLayers(data, &decoded)
+		if err != nil {
+			continue
+		}
+		// check port
+		port := strconv.Itoa(int(tcp.SrcPort))
+		_, ok := s.ports[port]
+		if !ok {
+			continue
+		}
+		// check hash
+
+		// send address
+		for i := 0; i < len(decoded); i++ {
+			switch decoded[i] {
+			case layers.LayerTypeIPv4:
+				select {
+				case <-s.stopSignal:
+				case s.Address <- ipv4.SrcIP.String() + ":" + port:
+				}
+			case layers.LayerTypeIPv6:
+				select {
+				case <-s.stopSignal:
+				case s.Address <- "[" + ipv6.SrcIP.String() + "]:" + port:
+				}
+			}
+		}
+	}
+}
+
+func (s *Scanner) synScanner(wg *sync.WaitGroup) error {
+	handle, err := pcap.OpenLive(s.iface.Device, snaplen, false, pcap.BlockForever)
+	if err != nil {
+		return err
+	}
 	var (
 		target  net.IP
+		port    string
 		gateway net.IP
 		srcIP   net.IP
 	)
@@ -46,21 +113,14 @@ func (s *Scanner) synScanner(port string, errChan chan<- error) {
 	}
 	buf := gopacket.NewSerializeBuffer()
 	scan := func() {
-		// scan loopback
-		if target.IsLoopback() {
-			s.scanLoopback(target, port)
-			return
-		}
 		gateway, srcIP, err = s.route.route(target)
 		if err != nil {
-			s.addScanned()
 			return
 		}
 		// set eth
 		if gateway != nil { // send to gateway
 			eth.DstMAC, err = s.getGatewayHardwareAddr(srcIP, gateway)
 			if err != nil {
-				s.addScanned()
 				return
 			}
 			eth.SrcMAC = s.iface.MAC
@@ -68,7 +128,7 @@ func (s *Scanner) synScanner(port string, errChan chan<- error) {
 
 		}
 		// set tcp
-		tcp.SrcPort = 1999
+		tcp.SrcPort = 2020
 		p, _ := strconv.Atoi(port)
 		tcp.DstPort = layers.TCPPort(p)
 		// set ip
@@ -94,31 +154,51 @@ func (s *Scanner) synScanner(port string, errChan chan<- error) {
 			eth.EthernetType = layers.EthernetTypeIPv6
 		}
 		_ = handle.WritePacketData(buf.Bytes())
-		s.addScanned()
 	}
-	for {
-		select {
-		case target = <-s.generator.IP:
-			if target == nil {
-				return
-			}
+	portsLen := len(s.ports)
+	wg.Add(1)
+	go func() {
+		defer func() {
+			handle.Close()
+			wg.Done()
+		}()
+		for {
+		getIP:
 			select {
-			case <-s.tokenBucket:
+			case target = <-s.generator.IP:
+				if target == nil {
+					return
+				}
+				for port = range s.ports {
+					select {
+					case <-s.tokenBucket:
+					case <-s.stopSignal:
+						return
+					}
+					// check target
+					if target.Equal(net.IPv4bcast) ||
+						target.IsUnspecified() ||
+						target.IsMulticast() ||
+						target.IsLinkLocalUnicast() {
+						for i := 0; i < portsLen; i++ {
+							s.addScanned()
+						}
+						goto getIP
+					}
+					// scan loopback
+					if target.IsLoopback() {
+						s.scanLoopback(target, port)
+						return
+					}
+					scan()
+					s.addScanned()
+				}
 			case <-s.stopSignal:
 				return
 			}
-			if target.Equal(net.IPv4bcast) ||
-				target.IsUnspecified() ||
-				target.IsMulticast() ||
-				target.IsLinkLocalUnicast() {
-				s.addScanned()
-				continue
-			}
-			scan()
-		case <-s.stopSignal:
-			return
 		}
-	}
+	}()
+	return nil
 }
 
 func (s *Scanner) scanLoopback(ip net.IP, port string) {
@@ -201,7 +281,7 @@ func (s *Scanner) getHardwareAddrv4(srcIP, dstIP net.IP) ([]byte, error) {
 		return nil, err
 	}
 	defer handle.Close()
-	// TODO _ = handle.SetBPFFilter("arp")
+	_ = handle.SetBPFFilter("arp")
 	// send
 	err = handle.WritePacketData(buf.Bytes())
 	if err != nil {
@@ -210,13 +290,13 @@ func (s *Scanner) getHardwareAddrv4(srcIP, dstIP net.IP) ([]byte, error) {
 	// Wait 3 seconds for an ARP reply.
 	var decoded []gopacket.LayerType
 	parser := gopacket.NewDecodingLayerParser(layers.LayerTypeEthernet, &eth, &arp)
+	// TODO
 	parser.IgnoreUnsupported = true
 	for {
 		if time.Since(start) > time.Second*3 {
 			return nil, errors.New("timeout getting ARP reply")
 		}
-		// receive
-		data, _, err := handle.ReadPacketData()
+		data, _, err := handle.ZeroCopyReadPacketData()
 		if err != nil {
 			return nil, err
 		}
@@ -225,7 +305,6 @@ func (s *Scanner) getHardwareAddrv4(srcIP, dstIP net.IP) ([]byte, error) {
 			continue
 		}
 		if net.IP(arp.SourceProtAddress).Equal(dstIP) {
-			fmt.Println("mac", arp.SourceHwAddress)
 			return arp.SourceHwAddress, nil
 		}
 	}
@@ -233,47 +312,4 @@ func (s *Scanner) getHardwareAddrv4(srcIP, dstIP net.IP) ([]byte, error) {
 
 func (s *Scanner) getHardwareAddrv6(srcIP, dstIP net.IP) ([]byte, error) {
 	return nil, errors.New("wait")
-}
-
-func (s *Scanner) synCapturer(port string, errChan chan<- error) {
-	handle, err := pcap.OpenLive(s.iface.Device, snaplen, false, pcap.BlockForever)
-	if err != nil {
-		errChan <- err
-		return
-	}
-	errChan <- nil
-	defer handle.Close()
-	// tcp.flags.syn == 1 and tcp.flags.ack == 1
-	_ = handle.SetBPFFilter("tcp[13] = 0x12 and tcp port " + port)
-	for {
-		data, _, err := handle.ReadPacketData()
-		if err != nil {
-			return
-		}
-		d := make([]byte, len(data))
-		copy(d, data)
-		s.packetChan <- d
-	}
-}
-
-func (s *Scanner) synParser(port string) {
-	var (
-		err     error
-		data    []byte
-		eth     layers.Ethernet
-		ipv4    layers.IPv4
-		ipv6    layers.IPv6
-		tcp     layers.TCP
-		decoded []gopacket.LayerType
-	)
-	parser := gopacket.NewDecodingLayerParser(layers.LayerTypeEthernet,
-		&eth, &ipv4, &ipv6, &tcp)
-	parser.IgnoreUnsupported = true
-	for data = range s.packetChan {
-		err = parser.DecodeLayers(data, &decoded)
-		if err != nil {
-			continue
-		}
-		fmt.Println("receive", ipv4.SrcIP, tcp.SrcPort)
-	}
 }
