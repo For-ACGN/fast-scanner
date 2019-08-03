@@ -54,7 +54,7 @@ func New(targets, ports string, opts *Options) (*Scanner, error) {
 		targets:     split(targets),
 		ports:       make(map[string]struct{}, 1),
 		opts:        opts,
-		tokenBucket: make(chan struct{}, 16*opts.Workers),
+		tokenBucket: make(chan struct{}, opts.Rate),
 		scannedNum:  big.NewInt(0),
 		delta:       big.NewInt(1),
 		Result:      make(chan string, 16*opts.Workers),
@@ -105,8 +105,6 @@ func (s *Scanner) Start() error {
 		// calculate host number
 		n := s.generator.N
 		s.hostNum = n.Mul(n, big.NewInt(int64(len(s.ports))))
-		// token bucket
-		go s.addTokenLoop() // not set wg
 		switch s.method {
 		case MethodSYN:
 			if initErr != nil {
@@ -225,6 +223,8 @@ func (s *Scanner) Start() error {
 			s.Stop()
 			return
 		}
+		// token bucket
+		go s.addTokenLoop() // not set wg
 		// wait to finish
 		go func() {
 			s.wg.Wait()

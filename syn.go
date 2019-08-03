@@ -161,14 +161,19 @@ func (s *Scanner) synScanner(wg *sync.WaitGroup, handle *pcap.Handle) {
 		srcIP   net.IP
 		err     error
 	)
-	eth := new(layers.Ethernet)
-	ipv4 := &layers.IPv4{
+	eth := layers.Ethernet{}
+	ipv4 := layers.IPv4{
 		Version:  4,
 		Flags:    layers.IPv4DontFragment,
 		TTL:      128,
 		Protocol: layers.IPProtocolTCP,
 	}
-	tcp := &layers.TCP{
+	ipv6 := layers.IPv6{
+		Version:    6,
+		HopLimit:   128,
+		NextHeader: layers.IPProtocolTCP,
+	}
+	tcp := layers.TCP{
 		SYN: true,
 		// ECE:    true,
 		// CWR:    true,
@@ -215,11 +220,16 @@ func (s *Scanner) synScanner(wg *sync.WaitGroup, handle *pcap.Handle) {
 			eth.EthernetType = layers.EthernetTypeIPv4
 			ipv4.SrcIP = srcIP
 			ipv4.DstIP = target
-			_ = tcp.SetNetworkLayerForChecksum(ipv4)
+			_ = tcp.SetNetworkLayerForChecksum(&ipv4)
 			_ = buf.Clear()
-			_ = gopacket.SerializeLayers(buf, opt, eth, ipv4, tcp)
+			_ = gopacket.SerializeLayers(buf, opt, &eth, &ipv4, &tcp)
 		case net.IPv6len:
 			eth.EthernetType = layers.EthernetTypeIPv6
+			ipv6.SrcIP = srcIP
+			ipv6.DstIP = target
+			_ = tcp.SetNetworkLayerForChecksum(&ipv6)
+			_ = buf.Clear()
+			_ = gopacket.SerializeLayers(buf, opt, &eth, &ipv6, &tcp)
 		}
 		// send packet
 		_ = handle.WritePacketData(buf.Bytes())

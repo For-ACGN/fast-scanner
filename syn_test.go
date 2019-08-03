@@ -8,6 +8,7 @@ import (
 )
 
 func TestSynScanner(t *testing.T) {
+	start := time.Now()
 	// targets := "8.8.8.8-8.8.8.10, 2606:4700:4700::1001-2606:4700:4700::1003"
 	// targets := "192.168.1.1-192.168.1.254"
 	targets := "123.206.1.1-123.206.100.254"
@@ -16,7 +17,7 @@ func TestSynScanner(t *testing.T) {
 		// Method:  MethodConnect,
 		Timeout: 5 * time.Second,
 		Rate:    2000,
-		Workers: 1,
+		Workers: 16,
 	}
 	scanner, err := New(targets, ports, &opt)
 	require.NoError(t, err)
@@ -31,7 +32,7 @@ func TestSynScanner(t *testing.T) {
 		}
 		result[address] = struct{}{}
 	}
-	t.Log("result", len(result))
+	t.Log("result", len(result), "time:", time.Since(start))
 	require.Equal(t, scanner.HostNumber().String(), scanner.generator.N.String())
 	require.Equal(t, scanner.ScannedNumber().String(), scanner.generator.N.String())
 }
