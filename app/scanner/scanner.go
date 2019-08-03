@@ -31,7 +31,7 @@ func main() {
 	flag.StringVar(&method, "method", scanner.MethodSYN, "connect or syn")
 	flag.StringVar(&device, "device", "", "interface name Ethernet0, eth0")
 	flag.IntVar(&rate, "rate", 1000, "packet send per second")
-	flag.DurationVar(&timeout, "timeout", 10*time.Second, "timeout")
+	flag.DurationVar(&timeout, "timeout", 0, "timeout")
 	flag.IntVar(&workers, "workers", 0, "scanner number. usually don't need set")
 	flag.StringVar(&save, "save", "", "save scan result")
 	flag.Parse()
@@ -50,6 +50,7 @@ func main() {
 		}
 		log.SetOutput(&logger{file: file})
 	}
+	start := time.Now()
 	s, err := scanner.New(targets, ports, opts)
 	if err != nil {
 		log.Fatalln(err)
@@ -70,7 +71,7 @@ func main() {
 		scanned += 1
 		log.Print(addr + "\r\n")
 	}
-	log.Printf("scan finished. total: %d\r\n", scanned)
+	log.Printf("scan finished. total: %d time: %s\r\n", scanned, time.Since(start))
 }
 
 type logger struct {
