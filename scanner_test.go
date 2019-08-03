@@ -8,7 +8,7 @@ import (
 )
 
 func TestScanner_Start(t *testing.T) {
-	for addr := range testnewScanner(t).Address {
+	for addr := range testnewScanner(t).Result {
 		t.Log(addr)
 	}
 }

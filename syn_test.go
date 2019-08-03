@@ -11,29 +11,33 @@ func TestSynScanner(t *testing.T) {
 	// targets := "8.8.8.8-8.8.8.10, 2606:4700:4700::1001-2606:4700:4700::1003"
 	// targets := "192.168.1.1-192.168.1.254"
 	targets := "123.206.1.1-123.206.255.254"
-	ports := "1080"
+	ports := "80"
 	opt := Options{
-		Timeout: 3 * time.Second,
+		Timeout: 5 * time.Second,
 		Rate:    2000,
-		Workers: 16,
+		Workers: 1,
 	}
 	scanner, err := New(targets, ports, &opt)
 	require.NoError(t, err)
 	err = scanner.Start()
 	require.NoError(t, err)
 	result := make(map[string]struct{})
-	for address := range scanner.Address {
+	for address := range scanner.Result {
+		_, ok := result[address]
+		if ok {
+			t.Log("duplicate:", address)
+			continue
+		}
 		result[address] = struct{}{}
-		t.Log(address)
 	}
 	t.Log("result", len(result))
-	require.Equal(t, scanner.HostNumber().String(), "254")
-	require.Equal(t, scanner.ScannedNumber().String(), "254")
+	require.Equal(t, scanner.HostNumber().String(), scanner.generator.N.String())
+	require.Equal(t, scanner.ScannedNumber().String(), scanner.generator.N.String())
 }
 
 func TestSynScannerAccuracy(t *testing.T) {
 	targets := "123.206.1.1-123.206.255.254"
-	ports := "1080"
+	ports := "80"
 	opt := Options{
 		Device:  "Ethernet0",
 		Method:  MethodConnect,
@@ -47,7 +51,7 @@ func TestSynScannerAccuracy(t *testing.T) {
 	err = scanner.Start()
 	require.NoError(t, err)
 	connectResult := make(map[string]struct{})
-	for address := range scanner.Address {
+	for address := range scanner.Result {
 		connectResult[address] = struct{}{}
 	}
 	t.Log("tcp ok", time.Since(start))
@@ -56,13 +60,13 @@ func TestSynScannerAccuracy(t *testing.T) {
 	start = time.Now()
 	opt.Method = MethodSYN
 	opt.Rate = 2000
-	opt.Workers = 8
+	opt.Workers = 16
 	scanner, err = New(targets, ports, &opt)
 	require.NoError(t, err)
 	err = scanner.Start()
 	require.NoError(t, err)
 	synResult := make(map[string]struct{})
-	for address := range scanner.Address {
+	for address := range scanner.Result {
 		synResult[address] = struct{}{}
 	}
 	t.Log("syn ok", time.Since(start))

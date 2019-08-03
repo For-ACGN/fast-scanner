@@ -18,34 +18,40 @@ const (
 	snaplen = 65536
 )
 
-func (s *Scanner) synCapturer() (func(), error) {
-	handle, err := pcap.OpenLive(s.iface.Device, snaplen, false, pcap.BlockForever)
+func (s *Scanner) newSenderHandle() (*pcap.Handle, error) {
+	ihandle, err := pcap.NewInactiveHandle(s.iface.Device)
 	if err != nil {
 		return nil, err
 	}
-	// tcp.flags.syn == 1 and tcp.flags.ack == 1
-	_ = handle.SetBPFFilter("tcp[13] = 0x12")
-	go func() {
-		defer close(s.packetChan) // synParser will close
-		for {
-			data, _, err := handle.ZeroCopyReadPacketData()
-			if err != nil {
-				return
-			}
-			d := make([]byte, len(data))
-			copy(d, data)
-			s.packetChan <- d
-		}
-	}()
-	go func() {
-		<-s.stopSignal
-		handle.Close()
-	}()
-	return handle.Close, nil
+	defer ihandle.CleanUp()
+	_ = ihandle.SetSnapLen(snaplen)
+	_ = ihandle.SetPromisc(false)
+	_ = ihandle.SetTimeout(1) // only send
+	_ = ihandle.SetImmediateMode(true)
+	return ihandle.Activate()
 }
 
-func (s *Scanner) synParser(wg *sync.WaitGroup) {
-	defer wg.Done()
+func (s *Scanner) synCapturer(handle *pcap.Handle) {
+	defer s.wg.Done()
+	var (
+		data []byte
+		err  error
+	)
+	_ = handle.SetBPFFilter("tcp[13] = 0x12")
+	defer close(s.packetChan) // synParser will close
+	for {
+		data, _, err = handle.ZeroCopyReadPacketData()
+		if err != nil {
+			return
+		}
+		d := make([]byte, len(data))
+		copy(d, data)
+		s.packetChan <- d
+	}
+}
+
+func (s *Scanner) synParser(handle *pcap.Handle) {
+	defer s.wg.Done()
 	var (
 		err     error
 		data    []byte
@@ -80,10 +86,12 @@ func (s *Scanner) synParser(wg *sync.WaitGroup) {
 				// check port and ack
 				if uint16(tcp.DstPort) == binary.BigEndian.Uint16(hash[:2]) &&
 					tcp.Ack-1 == binary.BigEndian.Uint32(hash[2:6]) {
+					// send RST
+
 					select {
 					case <-s.stopSignal:
 						return
-					case s.Address <- ipv4.SrcIP.String() + ":" + port:
+					case s.Result <- ipv4.SrcIP.String() + ":" + port:
 					}
 				}
 				goto getNewData
@@ -96,10 +104,12 @@ func (s *Scanner) synParser(wg *sync.WaitGroup) {
 				// check port and ack
 				if uint16(tcp.SrcPort) == binary.BigEndian.Uint16(hash[:2]) &&
 					tcp.Ack-1 == binary.BigEndian.Uint32(hash[2:6]) {
+					// send RST
+
 					select {
 					case <-s.stopSignal:
 						return
-					case s.Address <- "[" + ipv6.SrcIP.String() + "]:" + port:
+					case s.Result <- "[" + ipv6.SrcIP.String() + "]:" + port:
 					}
 				}
 				goto getNewData
@@ -109,16 +119,17 @@ func (s *Scanner) synParser(wg *sync.WaitGroup) {
 	}
 }
 
-func (s *Scanner) synScanner(wg *sync.WaitGroup) error {
-	handle, err := pcap.OpenLive(s.iface.Device, snaplen, false, pcap.BlockForever)
-	if err != nil {
-		return err
-	}
+func (s *Scanner) synScanner(wg *sync.WaitGroup, handle *pcap.Handle) {
+	defer func() {
+		handle.Close()
+		wg.Done()
+	}()
 	var (
 		target  net.IP
 		port    string
 		gateway net.IP
 		srcIP   net.IP
+		err     error
 	)
 	eth := new(layers.Ethernet)
 	ipv4 := &layers.IPv4{
@@ -183,49 +194,42 @@ func (s *Scanner) synScanner(wg *sync.WaitGroup) error {
 		_ = handle.WritePacketData(buf.Bytes())
 	}
 	portsLen := len(s.ports)
-	wg.Add(1)
-	go func() {
-		defer func() {
-			handle.Close()
-			wg.Done()
-		}()
-		for {
-		getIP:
-			select {
-			case target = <-s.generator.IP:
-				if target == nil {
-					return
-				}
-				for port = range s.ports {
-					select {
-					case <-s.tokenBucket:
-					case <-s.stopSignal:
-						return
-					}
-					// check target
-					if target.Equal(net.IPv4bcast) ||
-						target.IsUnspecified() ||
-						target.IsMulticast() ||
-						target.IsLinkLocalUnicast() {
-						for i := 0; i < portsLen; i++ {
-							s.addScanned()
-						}
-						goto getIP
-					}
-					// scan loopback
-					if target.IsLoopback() {
-						s.scanLoopback(target, port)
-						return
-					}
-					scan()
-					s.addScanned()
-				}
-			case <-s.stopSignal:
+	for {
+	getIP:
+		select {
+		case target = <-s.generator.IP:
+			if target == nil {
 				return
 			}
+			for port = range s.ports {
+				select {
+				case <-s.tokenBucket:
+				case <-s.stopSignal:
+					return
+				}
+				// check target
+				if target.Equal(net.IPv4bcast) ||
+					target.IsUnspecified() ||
+					target.IsMulticast() ||
+					target.IsLinkLocalUnicast() {
+					for i := 0; i < portsLen; i++ {
+						s.addScanned()
+					}
+					goto getIP
+				}
+				// scan loopback
+				if target.IsLoopback() {
+					s.scanLoopback(target, port)
+					return
+				}
+				scan()
+				s.addScanned()
+			}
+		case <-s.stopSignal:
+			return
 		}
-	}()
-	return nil
+	}
+
 }
 
 func (s *Scanner) scanLoopback(ip net.IP, port string) {
@@ -245,7 +249,7 @@ func (s *Scanner) scanLoopback(ip net.IP, port string) {
 	_ = conn.Close()
 	select {
 	case <-s.stopSignal:
-	case s.Address <- address:
+	case s.Result <- address:
 		s.addScanned()
 	}
 }

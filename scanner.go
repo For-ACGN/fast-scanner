@@ -4,12 +4,12 @@ import (
 	"math/big"
 	"math/rand"
 	"net"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/google/gopacket/pcap"
 	"github.com/pkg/errors"
 )
 
@@ -31,7 +31,7 @@ type Scanner struct {
 	gatewayMACs map[string]net.HardwareAddr
 	gatewayMu   sync.Mutex
 	tokenBucket chan struct{} // for rate
-	Address     chan string
+	Result      chan string
 	startOnce   sync.Once
 	stopOnce    sync.Once
 	stopSignal  chan struct{}
@@ -57,7 +57,7 @@ func New(targets, ports string, opts *Options) (*Scanner, error) {
 		tokenBucket: make(chan struct{}, 16*opts.Workers),
 		scannedNum:  big.NewInt(0),
 		delta:       big.NewInt(1),
-		Address:     make(chan string, 16*opts.Workers),
+		Result:      make(chan string, 16*opts.Workers),
 		stopSignal:  make(chan struct{}),
 	}
 	// set ports
@@ -132,45 +132,68 @@ func (s *Scanner) Start() error {
 			for i := 0; i < 16; i++ {
 				s.salt[i] = byte(random.Intn(256))
 			}
-			// init capturer
-			closeCapturer, e := s.synCapturer()
-			if e != nil {
-				err = e
+			var (
+				ihandle   *pcap.InactiveHandle
+				capHandle *pcap.Handle // capturer
+				parHandle *pcap.Handle // parser
+				sanHanlde *pcap.Handle // scanner
+			)
+			// start capturer
+			ihandle, err = pcap.NewInactiveHandle(s.iface.Device)
+			if err != nil {
 				s.Stop()
 				return
 			}
+			_ = ihandle.SetSnapLen(snaplen)
+			_ = ihandle.SetPromisc(false)
+			_ = ihandle.SetTimeout(pcap.BlockForever)
+			_ = ihandle.SetImmediateMode(true)
+			capHandle, err = ihandle.Activate()
+			ihandle.CleanUp()
+			if err != nil {
+				s.Stop()
+				return
+			}
+			s.wg.Add(1)
+			go s.synCapturer(capHandle)
 			// start parser
-			parserWG := new(sync.WaitGroup)
-			for i := 0; i < runtime.NumCPU(); i++ {
-				parserWG.Add(1)
-				go s.synParser(parserWG)
+			for i := 0; i < s.opts.Workers; i++ {
+				parHandle, err = s.newSenderHandle()
+				if err != nil {
+					capHandle.Close()
+					s.Stop()
+					return
+				}
+				s.wg.Add(1)
+				go s.synParser(parHandle)
 			}
 			// wait to prepare read
 			time.Sleep(250 * time.Millisecond)
 			// start scanner
 			scannerWG := new(sync.WaitGroup)
 			for i := 0; i < s.opts.Workers; i++ {
-				// scannerWG.Add(1) is in function
-				err = s.synScanner(scannerWG)
+				sanHanlde, err = s.newSenderHandle()
 				if err != nil {
-					closeCapturer()
-					parserWG.Wait()
+					capHandle.Close()
 					s.Stop()
 					return
 				}
+				scannerWG.Add(1)
+				go s.synScanner(scannerWG, sanHanlde)
+				time.Sleep(10 * time.Millisecond)
 			}
+			// wait finish
 			s.wg.Add(1)
 			go func() {
 				// wait scanner
 				scannerWG.Wait()
 				select {
 				case <-s.stopSignal: // stop
-				default: // send finish
+				default: // send finish and wait
 					time.Sleep(s.opts.Timeout)
 				}
 				// close capturer
-				closeCapturer()
-				parserWG.Wait()
+				capHandle.Close()
 				s.wg.Done()
 			}()
 		case MethodConnect:
@@ -205,7 +228,7 @@ func (s *Scanner) Start() error {
 		// wait to finish
 		go func() {
 			s.wg.Wait()
-			close(s.Address)
+			close(s.Result)
 			s.stopOnce.Do(func() {
 				close(s.stopSignal)
 			})
