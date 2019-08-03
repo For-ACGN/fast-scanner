@@ -27,14 +27,14 @@ func (opt *Options) apply() {
 		opt.Rate = 1000
 	}
 	if opt.Timeout < 1 {
-		opt.Timeout = 10 * time.Second
+		opt.Timeout = 5 * time.Second
 	}
 	if opt.Workers < 1 {
 		switch opt.Method {
 		case MethodConnect:
-			opt.Workers = 512 * runtime.NumCPU()
-		case MethodSYN:
 			opt.Workers = 8 * runtime.NumCPU()
+		case MethodSYN:
+			opt.Workers = runtime.NumCPU()
 		}
 	}
 }
