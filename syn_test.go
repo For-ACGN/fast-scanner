@@ -10,9 +10,10 @@ import (
 func TestSynScanner(t *testing.T) {
 	// targets := "8.8.8.8-8.8.8.10, 2606:4700:4700::1001-2606:4700:4700::1003"
 	// targets := "192.168.1.1-192.168.1.254"
-	targets := "123.206.1.1-123.206.255.254"
+	targets := "123.206.1.1-123.206.100.254"
 	ports := "80"
 	opt := Options{
+		// Method:  MethodConnect,
 		Timeout: 5 * time.Second,
 		Rate:    2000,
 		Workers: 1,
