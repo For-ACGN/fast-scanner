@@ -1,6 +1,8 @@
 package scanner
 
 import (
+	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"net"
 	"strconv"
@@ -66,23 +68,44 @@ func (s *Scanner) synParser(wg *sync.WaitGroup) {
 		if !ok {
 			continue
 		}
-		// check hash
-
 		// send address
 		for i := 0; i < len(decoded); i++ {
 			switch decoded[i] {
 			case layers.LayerTypeIPv4:
-				select {
-				case <-s.stopSignal:
-				case s.Address <- ipv4.SrcIP.String() + ":" + port:
+				// check hash
+				sha := sha256.New()
+				sha.Write(ipv4.SrcIP)
+				sha.Write(s.salt)
+				hash := sha.Sum(nil)
+				// check port and ack
+				if uint16(tcp.DstPort) == binary.BigEndian.Uint16(hash[:2]) &&
+					tcp.Ack-1 == binary.BigEndian.Uint32(hash[2:6]) {
+					select {
+					case <-s.stopSignal:
+						return
+					case s.Address <- ipv4.SrcIP.String() + ":" + port:
+					}
 				}
+				goto getNewData
 			case layers.LayerTypeIPv6:
-				select {
-				case <-s.stopSignal:
-				case s.Address <- "[" + ipv6.SrcIP.String() + "]:" + port:
+				// check hash
+				sha := sha256.New()
+				sha.Write(ipv6.SrcIP)
+				sha.Write(s.salt)
+				hash := sha.Sum(nil)
+				// check port and ack
+				if uint16(tcp.SrcPort) == binary.BigEndian.Uint16(hash[:2]) &&
+					tcp.Ack-1 == binary.BigEndian.Uint32(hash[2:6]) {
+					select {
+					case <-s.stopSignal:
+						return
+					case s.Address <- "[" + ipv6.SrcIP.String() + "]:" + port:
+					}
 				}
+				goto getNewData
 			}
 		}
+	getNewData:
 	}
 }
 
@@ -106,6 +129,10 @@ func (s *Scanner) synScanner(wg *sync.WaitGroup) error {
 	}
 	tcp := &layers.TCP{
 		SYN: true,
+		// ECE:    true,
+		// CWR:    true,
+		Window: 8192,
+		// Options:[]layers.TCPOption{}
 	}
 	opt := gopacket.SerializeOptions{
 		FixLengths:       true,
@@ -117,18 +144,28 @@ func (s *Scanner) synScanner(wg *sync.WaitGroup) error {
 		if err != nil {
 			return
 		}
-		// set eth
+		// set dst MAC
 		if gateway != nil { // send to gateway
 			eth.DstMAC, err = s.getGatewayHardwareAddr(srcIP, gateway)
 			if err != nil {
 				return
 			}
-			eth.SrcMAC = s.iface.MAC
 		} else { // LAN
-
+			eth.DstMAC, err = s.getHardwareAddr(srcIP, target)
+			if err != nil {
+				return
+			}
 		}
-		// set tcp
-		tcp.SrcPort = 2020
+		eth.SrcMAC = s.iface.MAC
+		// hash
+		sha := sha256.New()
+		sha.Write(target)
+		sha.Write(s.salt)
+		hash := sha.Sum(nil)
+		// set src port
+		tcp.SrcPort = layers.TCPPort(binary.BigEndian.Uint16(hash[:2]))
+		tcp.Seq = binary.BigEndian.Uint32(hash[2:6])
+		// set dst port
 		p, _ := strconv.Atoi(port)
 		tcp.DstPort = layers.TCPPort(p)
 		// set ip
@@ -140,16 +177,6 @@ func (s *Scanner) synScanner(wg *sync.WaitGroup) error {
 			_ = tcp.SetNetworkLayerForChecksum(ipv4)
 			_ = buf.Clear()
 			_ = gopacket.SerializeLayers(buf, opt, eth, ipv4, tcp)
-			/*
-				err = tcp.SetNetworkLayerForChecksum(ipv4)
-				fmt.Println("1", err)
-				err = buf.Clear()
-				fmt.Println("2", err)
-				err = gopacket.SerializeLayers(buf, opt, eth, ipv4, tcp)
-				fmt.Println("3", err)
-				err = handle.WritePacketData(buf.Bytes())
-				fmt.Println("4", err)
-			*/
 		case net.IPv6len:
 			eth.EthernetType = layers.EthernetTypeIPv6
 		}
@@ -231,85 +258,88 @@ func (s *Scanner) getGatewayHardwareAddr(srcIP, gateway net.IP) (net.HardwareAdd
 	if ok {
 		return m, nil
 	}
-	// get hardware addrress
-	if len(gateway) == net.IPv4len { // ipv4
-		haddr, err := s.getHardwareAddrv4(srcIP, gateway)
-		if err != nil {
-			return nil, err
-		}
-		s.gatewayMACs[gatewayStr] = haddr
-		return haddr, nil
-	} else { // ipv6
-		haddr, err := s.getHardwareAddrv6(srcIP, gateway)
-		if err != nil {
-			return nil, err
-		}
-		s.gatewayMACs[gatewayStr] = haddr
-		return haddr, nil
+	haddr, err := s.getHardwareAddr(srcIP, gateway)
+	if err != nil {
+		return nil, err
 	}
+	s.gatewayMACs[gatewayStr] = haddr
+	return haddr, nil
 }
 
 var (
 	zeroMAC = []byte{0, 0, 0, 0, 0, 0}
 )
 
-func (s *Scanner) getHardwareAddrv4(srcIP, dstIP net.IP) ([]byte, error) {
-	start := time.Now()
+func (s *Scanner) getHardwareAddr(srcIP, dstIP net.IP) (net.HardwareAddr, error) {
+	srcIPLen := len(srcIP)
+	dstIPLen := len(dstIP)
+	if srcIPLen != dstIPLen {
+		return nil, errors.New("not the same size")
+	}
+	// wait 2 seconds for reply
+	ihandle, err := pcap.NewInactiveHandle(s.iface.Device)
+	if err != nil {
+		return nil, err
+	}
+	defer ihandle.CleanUp()
+	_ = ihandle.SetSnapLen(snaplen)
+	_ = ihandle.SetPromisc(false)
+	_ = ihandle.SetTimeout(2 * time.Second)
+	_ = ihandle.SetImmediateMode(true)
+	handle, err := ihandle.Activate()
+	if err != nil {
+		return nil, err
+	}
+	defer handle.Close()
+	// packet
 	eth := layers.Ethernet{
 		SrcMAC:       s.iface.MAC,
 		DstMAC:       layers.EthernetBroadcast,
 		EthernetType: layers.EthernetTypeARP,
 	}
-	arp := layers.ARP{
-		AddrType:          layers.LinkTypeEthernet,
-		Protocol:          layers.EthernetTypeIPv4,
-		HwAddressSize:     6,
-		ProtAddressSize:   4,
-		Operation:         layers.ARPRequest,
-		SourceHwAddress:   []byte(s.iface.MAC),
-		SourceProtAddress: []byte(srcIP),
-		DstHwAddress:      zeroMAC,
-		DstProtAddress:    []byte(dstIP),
-	}
 	opt := gopacket.SerializeOptions{
 		FixLengths: true,
 	}
 	buf := gopacket.NewSerializeBuffer()
-	_ = gopacket.SerializeLayers(buf, opt, &eth, &arp)
-	handle, err := pcap.OpenLive(s.iface.Device, snaplen, false, pcap.BlockForever)
-	if err != nil {
-		return nil, err
-	}
-	defer handle.Close()
-	_ = handle.SetBPFFilter("arp")
-	// send
-	err = handle.WritePacketData(buf.Bytes())
-	if err != nil {
-		return nil, err
-	}
-	// Wait 3 seconds for an ARP reply.
-	var decoded []gopacket.LayerType
-	parser := gopacket.NewDecodingLayerParser(layers.LayerTypeEthernet, &eth, &arp)
-	// TODO
-	parser.IgnoreUnsupported = true
-	for {
-		if time.Since(start) > time.Second*3 {
-			return nil, errors.New("timeout getting ARP reply")
+	switch srcIPLen {
+	case net.IPv4len: // ARP
+		arp := layers.ARP{
+			AddrType:          layers.LinkTypeEthernet,
+			Protocol:          layers.EthernetTypeIPv4,
+			HwAddressSize:     6,
+			ProtAddressSize:   4,
+			Operation:         layers.ARPRequest,
+			SourceHwAddress:   []byte(s.iface.MAC),
+			SourceProtAddress: []byte(srcIP),
+			DstHwAddress:      zeroMAC,
+			DstProtAddress:    []byte(dstIP),
 		}
-		data, _, err := handle.ZeroCopyReadPacketData()
+		_ = gopacket.SerializeLayers(buf, opt, &eth, &arp)
+		_ = handle.SetBPFFilter("arp[7] == 0x02") // reply
+		err = handle.WritePacketData(buf.Bytes())
 		if err != nil {
 			return nil, err
 		}
-		err = parser.DecodeLayers(data, &decoded)
-		if err != nil {
-			continue
+		var decoded []gopacket.LayerType
+		parser := gopacket.NewDecodingLayerParser(layers.LayerTypeEthernet, &eth, &arp)
+		parser.IgnoreUnsupported = true // pass error: "No decoder for layer type Payload"
+		for {
+			data, _, err := handle.ZeroCopyReadPacketData()
+			if err != nil {
+				return nil, err
+			}
+			err = parser.DecodeLayers(data, &decoded)
+			if err != nil {
+				continue
+			}
+			if net.IP(arp.SourceProtAddress).Equal(dstIP) {
+				return arp.SourceHwAddress, nil
+			}
 		}
-		if net.IP(arp.SourceProtAddress).Equal(dstIP) {
-			return arp.SourceHwAddress, nil
-		}
-	}
-}
+	case net.IPv6len: // ICMPv6
 
-func (s *Scanner) getHardwareAddrv6(srcIP, dstIP net.IP) ([]byte, error) {
-	return nil, errors.New("wait")
+		return nil, errors.New("wait support")
+	default:
+		return nil, errors.New("invalid ip size")
+	}
 }
