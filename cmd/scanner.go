@@ -66,7 +66,7 @@ func main() {
 		log.Print("stop scanner\r\n")
 	}()
 	var scanned int
-	for addr := range s.Address {
+	for addr := range s.Result {
 		scanned += 1
 		log.Print(addr + "\r\n")
 	}

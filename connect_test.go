@@ -18,7 +18,7 @@ func TestConnectScanner(t *testing.T) {
 	err = scanner.Start()
 	require.NoError(t, err)
 	result := make(map[string]struct{})
-	for address := range scanner.Address {
+	for address := range scanner.Result {
 		result[address] = struct{}{}
 	}
 	expected := []string{

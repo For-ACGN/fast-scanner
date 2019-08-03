@@ -32,7 +32,7 @@ func (s *Scanner) connectScanner() {
 				}
 				select {
 				case <-s.stopSignal:
-				case s.Address <- address:
+				case s.Result <- address:
 					s.addScanned()
 				}
 			}

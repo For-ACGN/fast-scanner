@@ -32,9 +32,9 @@ func (opt *Options) apply() {
 	if opt.Workers < 1 {
 		switch opt.Method {
 		case MethodConnect:
-			opt.Workers = 8 * runtime.NumCPU()
+			opt.Workers = 128 * runtime.NumCPU()
 		case MethodSYN:
-			opt.Workers = runtime.NumCPU()
+			opt.Workers = 1
 		}
 	}
 }
