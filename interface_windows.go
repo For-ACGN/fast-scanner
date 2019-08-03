@@ -9,8 +9,7 @@ import (
 	"github.com/StackExchange/wmi"
 )
 
-// if name is "" select the first interface
-func selectInterface(name string) (*Interface, error) {
+func GetAllInterface() ([]*Interface, error) {
 	type Win32NetworkAdapter struct {
 		NetConnectionID string
 		GUID            string // GUID=SettingID
@@ -21,7 +20,8 @@ func selectInterface(name string) (*Interface, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(adapters) == 0 {
+	l := len(adapters)
+	if l == 0 {
 		return nil, errors.New("no adapter")
 	}
 	type Win32NetworkAdapterConfiguration struct {
@@ -37,18 +37,19 @@ func selectInterface(name string) (*Interface, error) {
 	if err != nil {
 		return nil, err
 	}
-	ifaces := make(map[string]*Interface)
-	for _, adapter := range adapters {
+	ifaces := make([]*Interface, l)
+	for i, adapter := range adapters {
 		iface := &Interface{
+			Name:   adapter.NetConnectionID,
 			Device: "\\Device\\NPF_" + adapter.GUID,
 		}
-		ifaces[adapter.NetConnectionID] = iface
+		ifaces[i] = iface
 		for _, config := range configs {
 			if config.SettingID == adapter.GUID {
 				// set MAC Address
 				iface.MAC, _ = net.ParseMAC(config.MACAddress)
 				// set IP Nets
-				l := len(config.IPAddress)
+				l = len(config.IPAddress)
 				iface.IPNets = make([]*net.IPNet, l)
 				for i := 0; i < l; i++ {
 					ip := net.ParseIP(config.IPAddress[i])
@@ -72,12 +73,22 @@ func selectInterface(name string) (*Interface, error) {
 			}
 		}
 	}
+	return ifaces, nil
+}
+
+// if name is "" select the first interface
+func SelectInterface(name string) (*Interface, error) {
+	ifaces, err := GetAllInterface()
+	if err != nil {
+		return nil, err
+	}
 	if name == "" {
-		return ifaces[adapters[0].NetConnectionID], nil
+		return ifaces[0], nil
 	}
-	if iface, ok := ifaces[name]; ok {
-		return iface, nil
-	} else {
-		return nil, fmt.Errorf("interface: %s doesn't exist", name)
+	for i := 0; i < len(ifaces); i++ {
+		if ifaces[i].Name == name {
+			return ifaces[i], nil
+		}
 	}
+	return nil, fmt.Errorf("interface: %s doesn't exist", name)
 }

@@ -7,7 +7,7 @@ import (
 )
 
 func TestSelectInterfaces(t *testing.T) {
-	iface, err := selectInterface("")
+	iface, err := SelectInterface("")
 	require.NoError(t, err)
 	t.Log(iface)
 }

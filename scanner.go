@@ -114,7 +114,7 @@ func (s *Scanner) Start() error {
 				s.Stop()
 				return
 			}
-			s.iface, err = selectInterface(s.opts.Device)
+			s.iface, err = SelectInterface(s.opts.Device)
 			if err != nil {
 				s.Stop()
 				return
@@ -130,7 +130,7 @@ func (s *Scanner) Start() error {
 			random := rand.New(rand.NewSource(time.Now().UnixNano()))
 			s.salt = make([]byte, 16)
 			for i := 0; i < 16; i++ {
-				s.salt[0] = byte(random.Intn(256))
+				s.salt[i] = byte(random.Intn(256))
 			}
 			// init capturer
 			closeCapturer, e := s.synCapturer()
@@ -176,7 +176,7 @@ func (s *Scanner) Start() error {
 		case MethodConnect:
 			var localIPs []string
 			if s.opts.Device != "" {
-				iface, e := selectInterface(s.opts.Device)
+				iface, e := SelectInterface(s.opts.Device)
 				if e != nil {
 					err = e
 					s.Stop()

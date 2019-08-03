@@ -41,7 +41,7 @@ func TestDialer_getLocalAddr(t *testing.T) {
 
 func TestDialer_Dial(t *testing.T) {
 	// ipv4
-	iface, err := selectInterface("")
+	iface, err := SelectInterface("")
 	require.NoError(t, err)
 	l := len(iface.IPNets)
 	localIPs := make([]string, l)

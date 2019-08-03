@@ -8,7 +8,7 @@ import (
 )
 
 func TestRoute(t *testing.T) {
-	iface, err := selectInterface("")
+	iface, err := SelectInterface("")
 	require.NoError(t, err)
 	route, err := newRouter(iface)
 	require.NoError(t, err)
