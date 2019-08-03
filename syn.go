@@ -251,8 +251,7 @@ func (s *Scanner) synScanner(wg *sync.WaitGroup, handle *pcap.Handle) {
 				// check target
 				if target.Equal(net.IPv4bcast) ||
 					target.IsUnspecified() ||
-					target.IsMulticast() ||
-					target.IsLinkLocalUnicast() {
+					target.IsMulticast() {
 					for i := 0; i < portsLen; i++ {
 						s.addScanned()
 					}
@@ -312,7 +311,8 @@ func (s *Scanner) getGatewayHardwareAddr(srcIP, gateway net.IP) (net.HardwareAdd
 }
 
 var (
-	zeroMAC = []byte{0, 0, 0, 0, 0, 0}
+	zeroMAC   = []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
+	ipv6mcast = []byte{0x33, 0x33, 0xFF, 0x54, 0x17, 0xDD}
 )
 
 func (s *Scanner) getHardwareAddr(srcIP, dstIP net.IP) (net.HardwareAddr, error) {
@@ -329,7 +329,7 @@ func (s *Scanner) getHardwareAddr(srcIP, dstIP net.IP) (net.HardwareAddr, error)
 	defer ihandle.CleanUp()
 	_ = ihandle.SetSnapLen(snaplen)
 	_ = ihandle.SetPromisc(false)
-	_ = ihandle.SetTimeout(2 * time.Second)
+	_ = ihandle.SetTimeout(time.Second)
 	_ = ihandle.SetImmediateMode(true)
 	handle, err := ihandle.Activate()
 	if err != nil {
@@ -338,9 +338,7 @@ func (s *Scanner) getHardwareAddr(srcIP, dstIP net.IP) (net.HardwareAddr, error)
 	defer handle.Close()
 	// packet
 	eth := layers.Ethernet{
-		SrcMAC:       s.iface.MAC,
-		DstMAC:       layers.EthernetBroadcast,
-		EthernetType: layers.EthernetTypeARP,
+		SrcMAC: s.iface.MAC,
 	}
 	opt := gopacket.SerializeOptions{
 		FixLengths: true,
@@ -348,6 +346,9 @@ func (s *Scanner) getHardwareAddr(srcIP, dstIP net.IP) (net.HardwareAddr, error)
 	buf := gopacket.NewSerializeBuffer()
 	switch srcIPLen {
 	case net.IPv4len: // ARP
+		_ = handle.SetBPFFilter("arp[7] == 0x02") // reply
+		eth.DstMAC = layers.EthernetBroadcast
+		eth.EthernetType = layers.EthernetTypeARP
 		arp := layers.ARP{
 			AddrType:          layers.LinkTypeEthernet,
 			Protocol:          layers.EthernetTypeIPv4,
@@ -360,11 +361,7 @@ func (s *Scanner) getHardwareAddr(srcIP, dstIP net.IP) (net.HardwareAddr, error)
 			DstProtAddress:    []byte(dstIP),
 		}
 		_ = gopacket.SerializeLayers(buf, opt, &eth, &arp)
-		_ = handle.SetBPFFilter("arp[7] == 0x02") // reply
-		err = handle.WritePacketData(buf.Bytes())
-		if err != nil {
-			return nil, err
-		}
+		_ = handle.WritePacketData(buf.Bytes())
 		var decoded []gopacket.LayerType
 		parser := gopacket.NewDecodingLayerParser(layers.LayerTypeEthernet, &eth, &arp)
 		parser.IgnoreUnsupported = true // pass error: "No decoder for layer type Payload"
@@ -382,6 +379,36 @@ func (s *Scanner) getHardwareAddr(srcIP, dstIP net.IP) (net.HardwareAddr, error)
 			}
 		}
 	case net.IPv6len: // ICMPv6
+		// TODO _ = handle.SetBPFFilter("arp[7] == 0x02") // reply
+		opt.ComputeChecksums = true
+		eth.DstMAC = ipv6mcast // TODO mac
+		eth.EthernetType = layers.EthernetTypeIPv6
+
+		d := make([]byte, net.IPv6len)
+		copy(d, net.IPv6linklocalallnodes)
+
+		ipv6 := layers.IPv6{
+			Version:    6,
+			NextHeader: layers.IPProtocolICMPv6,
+			HopLimit:   255,
+			SrcIP:      srcIP,
+			DstIP:      d,
+		}
+		typ := layers.CreateICMPv6TypeCode(layers.ICMPv6TypeNeighborSolicitation, 0)
+		icmpv6 := layers.ICMPv6{
+			TypeCode: typ,
+		}
+		ns := layers.ICMPv6NeighborSolicitation{
+			TargetAddress: dstIP,
+		}
+		icmpv6Opt := layers.ICMPv6Option{
+			Type: layers.ICMPv6OptSourceAddress,
+			Data: s.iface.MAC,
+		}
+		ns.Options = append(ns.Options, icmpv6Opt)
+		_ = icmpv6.SetNetworkLayerForChecksum(&ipv6)
+		_ = gopacket.SerializeLayers(buf, opt, &eth, &ipv6, &icmpv6, &ns)
+		_ = handle.WritePacketData(buf.Bytes())
 
 		return nil, errors.New("wait support")
 	default:

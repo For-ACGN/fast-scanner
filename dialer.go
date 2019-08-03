@@ -131,8 +131,7 @@ func (d *Dialer) Dial(network, address string) (string, error) {
 		ip := raddr.IP
 		if ip.Equal(net.IPv4bcast) ||
 			ip.IsUnspecified() ||
-			ip.IsMulticast() ||
-			ip.IsLinkLocalUnicast() {
+			ip.IsMulticast() {
 			return "", errors.New("invalid ip")
 		}
 		dialer := &net.Dialer{

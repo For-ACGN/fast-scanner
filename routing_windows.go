@@ -14,11 +14,11 @@ type route struct {
 }
 
 func (r *route) route(dst net.IP) (gateway, preferredSrc net.IP, err error) {
-	if !(len(dst) == net.IPv4len || len(dst) == net.IPv6len) &&
+	if !((len(dst) == net.IPv4len || len(dst) == net.IPv6len) &&
 		!dst.Equal(net.IPv4bcast) &&
 		!dst.IsUnspecified() &&
 		!dst.IsMulticast() &&
-		!dst.IsLinkLocalUnicast() {
+		!dst.IsLoopback()) {
 		err = errors.New("invalid ip")
 		return
 	}

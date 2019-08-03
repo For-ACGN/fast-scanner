@@ -11,7 +11,7 @@ func TestSynScanner(t *testing.T) {
 	start := time.Now()
 	// targets := "8.8.8.8-8.8.8.10, 2606:4700:4700::1001-2606:4700:4700::1003"
 	// targets := "192.168.1.1-192.168.1.254"
-	targets := "123.206.1.1-123.206.100.254"
+	targets := "fe80::5cd1:6549:1d54:17dd"
 	ports := "80"
 	opt := Options{
 		// Method:  MethodConnect,
@@ -44,7 +44,7 @@ func TestSynScannerAccuracy(t *testing.T) {
 		Device:  "Ethernet0",
 		Method:  MethodConnect,
 		Timeout: 5 * time.Second,
-		Rate:    500,
+		Rate:    1000,
 	}
 	// connect
 	start := time.Now()
