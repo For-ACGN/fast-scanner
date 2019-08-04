@@ -193,10 +193,6 @@ func (s *Scanner) synScanner(wg *sync.WaitGroup, handle *pcap.Handle) {
 	}
 	buf := gopacket.NewSerializeBuffer()
 	scan := func() {
-		gateway, srcIP, err = s.route.route(target)
-		if err != nil {
-			return
-		}
 		// set dst MAC
 		if gateway != nil { // send to gateway
 			eth.DstMAC, err = s.getGatewayHardwareAddr(srcIP, gateway)
@@ -263,8 +259,18 @@ func (s *Scanner) synScanner(wg *sync.WaitGroup, handle *pcap.Handle) {
 				}
 				// scan loopback
 				if target.IsLoopback() {
-					s.scanLoopback(target, port)
-					return
+					s.simpleScan(target, port)
+					goto getIP
+				}
+				// get route
+				gateway, srcIP, err = s.route.route(target)
+				if err != nil {
+					if err == errRouteSelf {
+						s.simpleScan(target, port)
+						goto getIP
+					}
+					s.addScanned()
+					goto getIP
 				}
 				scan()
 				s.addScanned()
@@ -275,7 +281,7 @@ func (s *Scanner) synScanner(wg *sync.WaitGroup, handle *pcap.Handle) {
 	}
 }
 
-func (s *Scanner) scanLoopback(ip net.IP, port string) {
+func (s *Scanner) simpleScan(ip net.IP, port string) {
 	var address string
 	if len(ip) == net.IPv4len {
 		address = ip.String() + ":" + port

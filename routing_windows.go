@@ -6,6 +6,10 @@ import (
 	"net"
 )
 
+var (
+	errRouteSelf = errors.New("self ip")
+)
+
 type route struct {
 	ipv4Nets    []*net.IPNet
 	ipv6Nets    []*net.IPNet
@@ -29,6 +33,10 @@ func (r *route) route(dst net.IP) (gateway, preferredSrc net.IP, err error) {
 		}
 		// check is LAN
 		for _, ipnet := range r.ipv4Nets {
+			if ipnet.IP.Equal(dst) {
+				err = errRouteSelf
+				return
+			}
 			if ipnet.Contains(dst) {
 				preferredSrc = ipnet.IP
 				return
@@ -47,6 +55,10 @@ func (r *route) route(dst net.IP) (gateway, preferredSrc net.IP, err error) {
 		}
 		// check is LAN
 		for _, ipnet := range r.ipv6Nets {
+			if ipnet.IP.Equal(dst) {
+				err = errRouteSelf
+				return
+			}
 			if ipnet.Contains(dst) {
 				preferredSrc = ipnet.IP
 				return
