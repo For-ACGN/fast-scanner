@@ -37,7 +37,7 @@ func (s *Scanner) synCapturer(handle *pcap.Handle) {
 		data []byte
 		err  error
 	)
-	_ = handle.SetBPFFilter("tcp[13] = 0x12")
+	// _ = handle.SetBPFFilter("tcp[13] = 0x12")
 	defer close(s.packetChan) // synParser will close
 	for {
 		data, _, err = handle.ZeroCopyReadPacketData()
@@ -51,7 +51,10 @@ func (s *Scanner) synCapturer(handle *pcap.Handle) {
 }
 
 func (s *Scanner) synParser(handle *pcap.Handle) {
-	defer s.wg.Done()
+	defer func() {
+		handle.Close()
+		s.wg.Done()
+	}()
 	var (
 		err     error
 		data    []byte
@@ -63,6 +66,7 @@ func (s *Scanner) synParser(handle *pcap.Handle) {
 	)
 	parser := gopacket.NewDecodingLayerParser(layers.LayerTypeEthernet,
 		&eth, &ipv4, &ipv6, &tcp)
+	parser.IgnoreUnsupported = true
 	// for send RST
 	opt := gopacket.SerializeOptions{
 		FixLengths:       true,
@@ -76,8 +80,7 @@ func (s *Scanner) synParser(handle *pcap.Handle) {
 		}
 		// check port
 		port := strconv.Itoa(int(tcp.SrcPort))
-		_, ok := s.ports[port]
-		if !ok {
+		if _, ok := s.ports[port]; !ok {
 			continue
 		}
 		// send address
@@ -92,8 +95,8 @@ func (s *Scanner) synParser(handle *pcap.Handle) {
 				// check port and ack
 				if uint16(tcp.DstPort) == binary.BigEndian.Uint16(hash[:2]) &&
 					tcp.Ack-1 == binary.BigEndian.Uint32(hash[2:6]) {
-					result := ipv4.SrcIP.String() + ":" + port
 					// send RST
+					result := ipv4.SrcIP.String() + ":" + port
 					// swap
 					eth.SrcMAC, eth.DstMAC = eth.DstMAC, eth.SrcMAC
 					ipv4.SrcIP, ipv4.DstIP = ipv4.DstIP, ipv4.SrcIP
@@ -122,15 +125,19 @@ func (s *Scanner) synParser(handle *pcap.Handle) {
 				sha.Write(s.salt)
 				hash := sha.Sum(nil)
 				// check port and ack
-				if uint16(tcp.SrcPort) == binary.BigEndian.Uint16(hash[:2]) &&
+				if uint16(tcp.DstPort) == binary.BigEndian.Uint16(hash[:2]) &&
 					tcp.Ack-1 == binary.BigEndian.Uint32(hash[2:6]) {
-					result := "[" + ipv6.SrcIP.String() + "]:" + port
 					// send RST
+					result := "[" + ipv6.SrcIP.String() + "]:" + port
 					// swap
 					eth.SrcMAC, eth.DstMAC = eth.DstMAC, eth.SrcMAC
 					ipv6.SrcIP, ipv6.DstIP = ipv6.DstIP, ipv6.SrcIP
 					tcp.SrcPort, tcp.DstPort = tcp.DstPort, tcp.SrcPort
 					tcp.Seq, tcp.Ack = tcp.Ack, tcp.Seq+1
+					// set flag
+					tcp.SYN = false
+					tcp.ACK = false
+					tcp.RST = true
 					// send packet
 					_ = tcp.SetNetworkLayerForChecksum(&ipv6)
 					_ = buf.Clear()
@@ -193,14 +200,11 @@ func (s *Scanner) synScanner(wg *sync.WaitGroup, handle *pcap.Handle) {
 		// set dst MAC
 		if gateway != nil { // send to gateway
 			eth.DstMAC, err = s.getGatewayHardwareAddr(srcIP, gateway)
-			if err != nil {
-				return
-			}
 		} else { // LAN
 			eth.DstMAC, err = s.getHardwareAddr(srcIP, target)
-			if err != nil {
-				return
-			}
+		}
+		if err != nil {
+			return
 		}
 		eth.SrcMAC = s.iface.MAC
 		// hash
@@ -269,7 +273,6 @@ func (s *Scanner) synScanner(wg *sync.WaitGroup, handle *pcap.Handle) {
 			return
 		}
 	}
-
 }
 
 func (s *Scanner) scanLoopback(ip net.IP, port string) {
@@ -298,9 +301,8 @@ func (s *Scanner) getGatewayHardwareAddr(srcIP, gateway net.IP) (net.HardwareAdd
 	s.gatewayMu.Lock()
 	defer s.gatewayMu.Unlock()
 	gatewayStr := gateway.String()
-	m, ok := s.gatewayMACs[gatewayStr]
-	if ok {
-		return m, nil
+	if mac, ok := s.gatewayMACs[gatewayStr]; ok {
+		return mac, nil
 	}
 	haddr, err := s.getHardwareAddr(srcIP, gateway)
 	if err != nil {
@@ -312,7 +314,9 @@ func (s *Scanner) getGatewayHardwareAddr(srcIP, gateway net.IP) (net.HardwareAdd
 
 var (
 	zeroMAC   = []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
-	ipv6mcast = []byte{0x33, 0x33, 0xFF, 0x54, 0x17, 0xDD}
+	ipv6mcast = []byte{0x33, 0x33, 0xFF, 0x00, 0x00, 0x00}
+	icmpv6ns  = net.IP{0xFF, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x01, 0xFF, 0x00, 0x00, 0x00}
 )
 
 func (s *Scanner) getHardwareAddr(srcIP, dstIP net.IP) (net.HardwareAddr, error) {
@@ -346,7 +350,7 @@ func (s *Scanner) getHardwareAddr(srcIP, dstIP net.IP) (net.HardwareAddr, error)
 	buf := gopacket.NewSerializeBuffer()
 	switch srcIPLen {
 	case net.IPv4len: // ARP
-		_ = handle.SetBPFFilter("arp[7] == 0x02") // reply
+		_ = handle.SetBPFFilter("arp[7] = 0x02") // reply
 		eth.DstMAC = layers.EthernetBroadcast
 		eth.EthernetType = layers.EthernetTypeARP
 		arp := layers.ARP{
@@ -362,9 +366,12 @@ func (s *Scanner) getHardwareAddr(srcIP, dstIP net.IP) (net.HardwareAddr, error)
 		}
 		_ = gopacket.SerializeLayers(buf, opt, &eth, &arp)
 		_ = handle.WritePacketData(buf.Bytes())
+		// receive reply
 		var decoded []gopacket.LayerType
-		parser := gopacket.NewDecodingLayerParser(layers.LayerTypeEthernet, &eth, &arp)
-		parser.IgnoreUnsupported = true // pass error: "No decoder for layer type Payload"
+		parser := gopacket.NewDecodingLayerParser(
+			layers.LayerTypeEthernet, &eth, &arp)
+		// pass error: "No decoder for layer type Payload"
+		parser.IgnoreUnsupported = true
 		for {
 			data, _, err := handle.ZeroCopyReadPacketData()
 			if err != nil {
@@ -379,20 +386,28 @@ func (s *Scanner) getHardwareAddr(srcIP, dstIP net.IP) (net.HardwareAddr, error)
 			}
 		}
 	case net.IPv6len: // ICMPv6
-		// TODO _ = handle.SetBPFFilter("arp[7] == 0x02") // reply
+		_ = handle.SetBPFFilter("icmp6[0] = 0x88") // reply
 		opt.ComputeChecksums = true
-		eth.DstMAC = ipv6mcast // TODO mac
+		// set dst MAC
+		mac := make([]byte, 6) // MAC size
+		copy(mac[:3], ipv6mcast[:3])
+		mac[3] = dstIP[13]
+		mac[4] = dstIP[14]
+		mac[5] = dstIP[15]
+		eth.DstMAC = mac
 		eth.EthernetType = layers.EthernetTypeIPv6
-
-		d := make([]byte, net.IPv6len)
-		copy(d, net.IPv6linklocalallnodes)
-
+		// set dst ip
+		dIP := make([]byte, net.IPv6len)
+		copy(dIP, icmpv6ns)
+		dIP[13] = dstIP[13]
+		dIP[14] = dstIP[14]
+		dIP[15] = dstIP[15]
 		ipv6 := layers.IPv6{
 			Version:    6,
 			NextHeader: layers.IPProtocolICMPv6,
 			HopLimit:   255,
 			SrcIP:      srcIP,
-			DstIP:      d,
+			DstIP:      dIP,
 		}
 		typ := layers.CreateICMPv6TypeCode(layers.ICMPv6TypeNeighborSolicitation, 0)
 		icmpv6 := layers.ICMPv6{
@@ -409,8 +424,37 @@ func (s *Scanner) getHardwareAddr(srcIP, dstIP net.IP) (net.HardwareAddr, error)
 		_ = icmpv6.SetNetworkLayerForChecksum(&ipv6)
 		_ = gopacket.SerializeLayers(buf, opt, &eth, &ipv6, &icmpv6, &ns)
 		_ = handle.WritePacketData(buf.Bytes())
-
-		return nil, errors.New("wait support")
+		// receive reply
+		var (
+			decoded []gopacket.LayerType
+			na      layers.ICMPv6NeighborAdvertisement
+		)
+		parser := gopacket.NewDecodingLayerParser(
+			layers.LayerTypeEthernet, &eth, &ipv6, &icmpv6, &na)
+		// pass error: "No decoder for layer type Payload"
+		parser.IgnoreUnsupported = true
+		for {
+			data, _, err := handle.ZeroCopyReadPacketData()
+			if err != nil {
+				return nil, err
+			}
+			err = parser.DecodeLayers(data, &decoded)
+			if err != nil {
+				continue
+			}
+			if ipv6.SrcIP.Equal(dstIP) {
+				if len(na.Options) != 1 {
+					continue
+				}
+				if na.Options[0].Type != layers.ICMPv6OptTargetAddress { // type
+					continue
+				}
+				if len(na.Options[0].Data) != 6 { // MAC size
+					continue
+				}
+				return na.Options[0].Data, nil
+			}
+		}
 	default:
 		return nil, errors.New("invalid ip size")
 	}
