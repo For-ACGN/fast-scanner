@@ -1,27 +1,45 @@
 package scanner
 
 import (
-	"fmt"
+	"net"
 
 	"github.com/google/gopacket/pcap"
 )
 
-func selectInterface(name string) (*Interface, error) {
-	ifs, err := pcap.FindAllDevs()
+func GetAllInterface() ([]*Interface, error) {
+	devs, err := pcap.FindAllDevs()
 	if err != nil {
 		return nil, err
 	}
-	iface := make(map[string]*pcap.Interface)
-	for i := 0; i < len(ifs); i++ {
-		iface[ifs[i].Name] = &ifs[i]
+	// to get MAC
+	ifs, err := net.Interfaces()
+	if err != nil {
+		return nil, err
 	}
-	var selected []*pcap.Interface
-	for _, name := range names {
-		i := iface[name]
-		if i == nil {
-			return nil, fmt.Errorf("interface: %s doesn't exist", name)
+	ifsLen := len(ifs)
+	l := len(devs)
+	ifaces := make([]*Interface, l)
+	for i := 0; i < l; i++ {
+		iface := Interface{
+			Name:   devs[i].Name, // same
+			Device: devs[i].Name, // same
+			// not need gateways
 		}
-		selected = append(selected, i)
+		// set IPNets
+		iface.IPNets = make([]*net.IPNet, len(devs[i].Addresses))
+		for i, address := range devs[i].Addresses {
+			iface.IPNets[i] = &net.IPNet{
+				IP:   address.IP,
+				Mask: address.Netmask,
+			}
+		}
+		// set MACS
+		for i := 0; i < ifsLen; i++ {
+			if ifs[i].Name == iface.Name {
+				iface.MAC = ifs[i].HardwareAddr
+			}
+		}
+		ifaces[i] = &iface
 	}
-	return selected, nil
+	return ifaces, nil
 }

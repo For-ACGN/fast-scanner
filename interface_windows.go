@@ -2,7 +2,6 @@ package scanner
 
 import (
 	"errors"
-	"fmt"
 	"net"
 	"strconv"
 
@@ -39,11 +38,10 @@ func GetAllInterface() ([]*Interface, error) {
 	}
 	ifaces := make([]*Interface, l)
 	for i, adapter := range adapters {
-		iface := &Interface{
+		iface := Interface{
 			Name:   adapter.NetConnectionID,
 			Device: "\\Device\\NPF_" + adapter.GUID,
 		}
-		ifaces[i] = iface
 		for _, config := range configs {
 			if config.SettingID == adapter.GUID {
 				// set MAC Address
@@ -72,23 +70,7 @@ func GetAllInterface() ([]*Interface, error) {
 				}
 			}
 		}
+		ifaces[i] = &iface
 	}
 	return ifaces, nil
-}
-
-// if name is "" select the first interface
-func SelectInterface(name string) (*Interface, error) {
-	ifaces, err := GetAllInterface()
-	if err != nil {
-		return nil, err
-	}
-	if name == "" {
-		return ifaces[0], nil
-	}
-	for i := 0; i < len(ifaces); i++ {
-		if ifaces[i].Name == name {
-			return ifaces[i], nil
-		}
-	}
-	return nil, fmt.Errorf("interface: %s doesn't exist", name)
 }
