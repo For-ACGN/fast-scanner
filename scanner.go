@@ -25,7 +25,7 @@ type Scanner struct {
 	numMu       sync.Mutex
 	dialer      *Dialer    // for connect and syn
 	iface       *Interface // for syn
-	route       *route
+	route       *router
 	salt        []byte
 	packetChan  chan []byte
 	gatewayMACs map[string]net.HardwareAddr
