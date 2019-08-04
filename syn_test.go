@@ -11,10 +11,10 @@ func TestSynScanner(t *testing.T) {
 	start := time.Now()
 	// targets := "8.8.8.8-8.8.8.10, 2606:4700:4700::1001-2606:4700:4700::1003, "
 	// targets += "192.168.1.1-192.168.1.254, fe80::5cd1:6549:1d54:17dd"
-	targets := "2606:4700:4700::1001"
-	ports := "53"
+	targets := "192.168.1.10,fe80::5cd1:6549:1d54:17dd"
+	ports := "3389"
 	opt := Options{
-		Timeout: 3 * time.Second,
+		Timeout: 1 * time.Second,
 		Rate:    2000,
 		Workers: 16,
 	}

@@ -37,7 +37,8 @@ func (s *Scanner) synCapturer(handle *pcap.Handle) {
 		data []byte
 		err  error
 	)
-	// _ = handle.SetBPFFilter("tcp[13] = 0x12")
+	// TODO _ = handle.SetBPFFilter("tcp[13] = 0x12") not support ipv6
+	_ = handle.SetBPFFilter("tcp")
 	defer close(s.packetChan) // synParser will close
 	for {
 		data, _, err = handle.ZeroCopyReadPacketData()
@@ -101,6 +102,8 @@ func (s *Scanner) synParser(handle *pcap.Handle) {
 					eth.SrcMAC, eth.DstMAC = eth.DstMAC, eth.SrcMAC
 					ipv4.SrcIP, ipv4.DstIP = ipv4.DstIP, ipv4.SrcIP
 					tcp.SrcPort, tcp.DstPort = tcp.DstPort, tcp.SrcPort
+					// tcp.Seq = tcp.Ack
+					// tcp.Ack = 0
 					tcp.Seq, tcp.Ack = tcp.Ack, tcp.Seq+1
 					// set flag
 					tcp.SYN = false
@@ -108,7 +111,6 @@ func (s *Scanner) synParser(handle *pcap.Handle) {
 					tcp.RST = true
 					// send packet
 					_ = tcp.SetNetworkLayerForChecksum(&ipv4)
-					_ = buf.Clear()
 					_ = gopacket.SerializeLayers(buf, opt, &eth, &ipv4, &tcp)
 					_ = handle.WritePacketData(buf.Bytes())
 					select {
@@ -133,6 +135,8 @@ func (s *Scanner) synParser(handle *pcap.Handle) {
 					eth.SrcMAC, eth.DstMAC = eth.DstMAC, eth.SrcMAC
 					ipv6.SrcIP, ipv6.DstIP = ipv6.DstIP, ipv6.SrcIP
 					tcp.SrcPort, tcp.DstPort = tcp.DstPort, tcp.SrcPort
+					// tcp.Seq = tcp.Ack
+					// tcp.Ack = 0
 					tcp.Seq, tcp.Ack = tcp.Ack, tcp.Seq+1
 					// set flag
 					tcp.SYN = false
@@ -140,7 +144,6 @@ func (s *Scanner) synParser(handle *pcap.Handle) {
 					tcp.RST = true
 					// send packet
 					_ = tcp.SetNetworkLayerForChecksum(&ipv6)
-					_ = buf.Clear()
 					_ = gopacket.SerializeLayers(buf, opt, &eth, &ipv6, &tcp)
 					_ = handle.WritePacketData(buf.Bytes())
 					select {
@@ -221,14 +224,12 @@ func (s *Scanner) synScanner(wg *sync.WaitGroup, handle *pcap.Handle) {
 			ipv4.SrcIP = srcIP
 			ipv4.DstIP = target
 			_ = tcp.SetNetworkLayerForChecksum(&ipv4)
-			_ = buf.Clear()
 			_ = gopacket.SerializeLayers(buf, opt, &eth, &ipv4, &tcp)
 		case net.IPv6len:
 			eth.EthernetType = layers.EthernetTypeIPv6
 			ipv6.SrcIP = srcIP
 			ipv6.DstIP = target
 			_ = tcp.SetNetworkLayerForChecksum(&ipv6)
-			_ = buf.Clear()
 			_ = gopacket.SerializeLayers(buf, opt, &eth, &ipv6, &tcp)
 		}
 		// send packet
