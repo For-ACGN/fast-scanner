@@ -6,18 +6,14 @@ import (
 	"net"
 )
 
-var (
-	errRouteSelf = errors.New("self ip")
-)
-
-type route struct {
+type router struct {
 	ipv4Nets    []*net.IPNet
 	ipv6Nets    []*net.IPNet
 	ipv4Gateway map[*net.IP]struct{}
 	ipv6Gateway map[*net.IP]struct{}
 }
 
-func (r *route) route(dst net.IP) (gateway, preferredSrc net.IP, err error) {
+func (r *router) route(dst net.IP) (gateway, preferredSrc net.IP, err error) {
 	if !((len(dst) == net.IPv4len || len(dst) == net.IPv6len) &&
 		!dst.Equal(net.IPv4bcast) &&
 		!dst.IsUnspecified() &&
@@ -81,11 +77,11 @@ func (r *route) route(dst net.IP) (gateway, preferredSrc net.IP, err error) {
 	return nil, nil, errors.New("no gateway")
 }
 
-func newRouter(iface *Interface) (*route, error) {
+func newRouter(iface *Interface) (*router, error) {
 	if len(iface.IPNets) == 0 {
 		return nil, errors.New("no ip")
 	}
-	r := &route{
+	r := &router{
 		ipv4Gateway: make(map[*net.IP]struct{}),
 		ipv6Gateway: make(map[*net.IP]struct{}),
 	}

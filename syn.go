@@ -263,7 +263,7 @@ func (s *Scanner) synScanner(wg *sync.WaitGroup, handle *pcap.Handle) {
 					s.simpleScan(target, port)
 					goto getIP
 				}
-				// get route
+				// get router
 				gateway, srcIP, err = s.route.route(target)
 				if err != nil {
 					if err == errRouteSelf {
