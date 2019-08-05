@@ -11,12 +11,12 @@ func TestSynScanner(t *testing.T) {
 	start := time.Now()
 	// targets := "8.8.8.8-8.8.8.10, 2606:4700:4700::1001-2606:4700:4700::1003, "
 	// targets += "192.168.1.1-192.168.1.254, fe80::5cd1:6549:1d54:17dd"
-	targets := "192.168.1.10,fe80::5cd1:6549:1d54:17dd"
-	ports := "3389"
+	targets := "8.8.8.8"
+	ports := "53"
 	opt := Options{
-		Timeout: 1 * time.Second,
+		Timeout: 5 * time.Second,
 		Rate:    2000,
-		Workers: 16,
+		Workers: 2,
 	}
 	scanner, err := New(targets, ports, &opt)
 	require.NoError(t, err)
@@ -24,8 +24,7 @@ func TestSynScanner(t *testing.T) {
 	require.NoError(t, err)
 	result := make(map[string]struct{})
 	for address := range scanner.Result {
-		_, ok := result[address]
-		if ok {
+		if _, ok := result[address]; ok {
 			t.Log("duplicate:", address)
 			continue
 		}
@@ -41,7 +40,7 @@ func TestSynScannerDuplicate(t *testing.T) {
 	start := time.Now()
 	// targets := "8.8.8.8-8.8.8.10, 2606:4700:4700::1001-2606:4700:4700::1003"
 	// targets := "192.168.1.1-192.168.1.254"
-	targets := "123.206.1.1-123.206.255.254"
+	targets := "123.206.1.1/16"
 	ports := "80"
 	opt := Options{
 		Timeout: 5 * time.Second,
@@ -54,8 +53,7 @@ func TestSynScannerDuplicate(t *testing.T) {
 	require.NoError(t, err)
 	result := make(map[string]struct{})
 	for address := range scanner.Result {
-		_, ok := result[address]
-		if ok {
+		if _, ok := result[address]; ok {
 			t.Log("duplicate:", address)
 			continue
 		}
@@ -67,7 +65,7 @@ func TestSynScannerDuplicate(t *testing.T) {
 }
 
 func TestSynScannerAccuracy(t *testing.T) {
-	targets := "123.206.1.1-123.206.255.254"
+	targets := "123.206.1.1/16"
 	ports := "80"
 	opt := Options{
 		Device:  "Ethernet0",
@@ -104,8 +102,7 @@ func TestSynScannerAccuracy(t *testing.T) {
 	// compare
 	var synScanned int
 	for address := range connectResult {
-		_, ok := synResult[address]
-		if ok {
+		if _, ok := synResult[address]; ok {
 			synScanned += 1
 		} else {
 			t.Log(address, "is lost")

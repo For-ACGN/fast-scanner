@@ -26,8 +26,7 @@ func TestConnectScanner(t *testing.T) {
 		"[2606:4700:4700::1001]:53",
 	}
 	for i := 0; i < len(expected); i++ {
-		_, ok := result[expected[i]]
-		if !ok {
+		if _, ok := result[expected[i]]; !ok {
 			t.Fatal(expected[i], "is lost")
 		}
 	}
