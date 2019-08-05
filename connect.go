@@ -6,38 +6,41 @@ import (
 
 func (s *Scanner) connectScanner() {
 	defer s.wg.Done()
+	var (
+		ip      net.IP
+		port    string
+		address string
+		err     error
+	)
 	for {
-		select {
-		case ip := <-s.generator.IP:
-			if ip == nil {
+		ip = <-s.generator.IP
+		if ip == nil {
+			return
+		}
+		for port = range s.ports {
+			// get token
+			select {
+			case <-s.tokenBucket:
+			case <-s.stopSignal:
 				return
 			}
-			for port := range s.ports {
-				select {
-				case <-s.tokenBucket:
-				case <-s.stopSignal:
-					return
-				}
-				// scan
-				var address string
-				if len(ip) == net.IPv4len {
-					address = ip.String() + ":" + port
-				} else {
-					address = "[" + ip.String() + "]:" + port
-				}
-				address, err := s.dialer.Dial("tcp", address)
-				if err != nil {
-					s.addScanned()
-					continue
-				}
-				select {
-				case <-s.stopSignal:
-				case s.Result <- address:
-					s.addScanned()
-				}
+			// scan
+			if len(ip) == net.IPv4len {
+				address = ip.String() + ":" + port
+			} else {
+				address = "[" + ip.String() + "]:" + port
 			}
-		case <-s.stopSignal:
-			return
+			address, err = s.dialer.Dial("tcp", address)
+			if err != nil {
+				s.addScanned()
+				continue
+			}
+			select {
+			case s.Result <- address:
+				s.addScanned()
+			case <-s.stopSignal:
+				return
+			}
 		}
 	}
 }
