@@ -1,14 +1,13 @@
 package scanner
 
 import (
-	"errors"
 	"net"
 	"strconv"
 
 	"github.com/StackExchange/wmi"
 )
 
-func GetAllInterface() ([]*Interface, error) {
+func GetAllInterfaces() ([]*Interface, error) {
 	type Win32NetworkAdapter struct {
 		NetConnectionID string
 		GUID            string // GUID=SettingID
@@ -21,7 +20,7 @@ func GetAllInterface() ([]*Interface, error) {
 	}
 	l := len(adapters)
 	if l == 0 {
-		return nil, errors.New("no adapter")
+		return nil, ErrNoInterfaces
 	}
 	type Win32NetworkAdapterConfiguration struct {
 		SettingID        string

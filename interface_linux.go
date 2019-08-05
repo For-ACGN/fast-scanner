@@ -6,10 +6,14 @@ import (
 	"github.com/google/gopacket/pcap"
 )
 
-func GetAllInterface() ([]*Interface, error) {
+func GetAllInterfaces() ([]*Interface, error) {
 	devs, err := pcap.FindAllDevs()
 	if err != nil {
 		return nil, err
+	}
+	devsLen := len(devs)
+	if devsLen == 0 {
+		return nil, ErrNoInterfaces
 	}
 	// to get MAC
 	ifs, err := net.Interfaces()
@@ -17,9 +21,8 @@ func GetAllInterface() ([]*Interface, error) {
 		return nil, err
 	}
 	ifsLen := len(ifs)
-	l := len(devs)
-	ifaces := make([]*Interface, l)
-	for i := 0; i < l; i++ {
+	ifaces := make([]*Interface, devsLen)
+	for i := 0; i < devsLen; i++ {
 		iface := Interface{
 			Name:   devs[i].Name, // same
 			Device: devs[i].Name, // same

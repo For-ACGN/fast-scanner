@@ -3,7 +3,11 @@ package scanner
 import (
 	"fmt"
 	"net"
+
+	"github.com/pkg/errors"
 )
+
+var ErrNoInterfaces = errors.New("no Interfaces")
 
 type Interface struct {
 	Name     string // windows: "Ethernet0"          linux: "eth0"
@@ -15,7 +19,7 @@ type Interface struct {
 
 // if name is "" select the first interface
 func SelectInterface(name string) (*Interface, error) {
-	ifaces, err := GetAllInterface()
+	ifaces, err := GetAllInterfaces()
 	if err != nil {
 		return nil, err
 	}
