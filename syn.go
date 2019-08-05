@@ -112,7 +112,11 @@ func (s *Scanner) synParser(handle *pcap.Handle) {
 					// send packet
 					_ = tcp.SetNetworkLayerForChecksum(&ipv4)
 					_ = gopacket.SerializeLayers(buf, opt, &eth, &ipv4, &tcp)
-					_ = handle.WritePacketData(buf.Bytes())
+					// must copy
+					buffer := buf.Bytes()
+					b := make([]byte, len(buffer))
+					copy(b, buffer)
+					_ = handle.WritePacketData(b)
 					select {
 					case <-s.stopSignal:
 						return
@@ -145,7 +149,11 @@ func (s *Scanner) synParser(handle *pcap.Handle) {
 					// send packet
 					_ = tcp.SetNetworkLayerForChecksum(&ipv6)
 					_ = gopacket.SerializeLayers(buf, opt, &eth, &ipv6, &tcp)
-					_ = handle.WritePacketData(buf.Bytes())
+					// must copy
+					buffer := buf.Bytes()
+					b := make([]byte, len(buffer))
+					copy(b, buffer)
+					_ = handle.WritePacketData(b)
 					select {
 					case <-s.stopSignal:
 						return
@@ -233,7 +241,14 @@ func (s *Scanner) synScanner(wg *sync.WaitGroup, handle *pcap.Handle) {
 			_ = gopacket.SerializeLayers(buf, opt, &eth, &ipv6, &tcp)
 		}
 		// send packet
-		_ = handle.WritePacketData(buf.Bytes())
+		// must copy
+		// unexpected fault address 0x613412a
+		// fatal error: fault
+		// [signal 0xc0000005 code=0x0 addr=0x613412a pc=0x45ed82]
+		buffer := buf.Bytes()
+		b := make([]byte, len(buffer))
+		copy(b, buffer)
+		_ = handle.WritePacketData(b)
 	}
 	portsLen := len(s.ports)
 	for {
@@ -389,7 +404,12 @@ func (s *Scanner) getHardwareAddr(srcIP, dstIP net.IP) (net.HardwareAddr, error)
 				continue
 			}
 			if net.IP(arp.SourceProtAddress).Equal(dstIP) {
-				return arp.SourceHwAddress, nil
+				// must copy
+				// parser.DecodeLayers is quote from data
+				// data from handle.ZeroCopyReadPacketData()
+				hwAddress := make([]byte, 6)
+				copy(hwAddress, arp.SourceHwAddress)
+				return hwAddress, nil
 			}
 		}
 	case net.IPv6len: // ICMPv6
@@ -459,7 +479,12 @@ func (s *Scanner) getHardwareAddr(srcIP, dstIP net.IP) (net.HardwareAddr, error)
 				if len(na.Options[0].Data) != 6 { // MAC size
 					continue
 				}
-				return na.Options[0].Data, nil
+				// must copy
+				// parser.DecodeLayers is quote from data
+				// data from handle.ZeroCopyReadPacketData()
+				hwAddress := make([]byte, 6)
+				copy(hwAddress, na.Options[0].Data)
+				return hwAddress, nil
 			}
 		}
 	default:
