@@ -226,7 +226,7 @@ func NewGenerator(targets []string) (*Generator, error) {
 			_, _, err := net.ParseCIDR(target)
 			if err != nil {
 				g.Close()
-				return nil, errors.New("invalid CIDR" + target)
+				return nil, errors.New("invalid CIDR: " + target)
 			}
 			g.genIPWithDash(target)
 		case hyphen != -1 && dash != -1: // "192.168.1.1-192.168.1.2/24"
