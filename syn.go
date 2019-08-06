@@ -22,16 +22,16 @@ const (
 // newSenderHandle will create a *pcap.Handle only for send
 // this handle will SetTimeout(1)
 func (s *Scanner) newSenderHandle() (*pcap.Handle, error) {
-	ihandle, err := pcap.NewInactiveHandle(s.iface.Device)
+	iHandle, err := pcap.NewInactiveHandle(s.iface.Device)
 	if err != nil {
 		return nil, err
 	}
-	defer ihandle.CleanUp()
-	_ = ihandle.SetSnapLen(snaplen)
-	_ = ihandle.SetPromisc(false)
-	_ = ihandle.SetTimeout(1) // only send
-	_ = ihandle.SetImmediateMode(true)
-	return ihandle.Activate()
+	defer iHandle.CleanUp()
+	_ = iHandle.SetSnapLen(snaplen)
+	_ = iHandle.SetPromisc(false)
+	_ = iHandle.SetTimeout(1) // only send
+	_ = iHandle.SetImmediateMode(true)
+	return iHandle.Activate()
 }
 
 // packetSender is used to control send packet rate
@@ -373,16 +373,16 @@ func (s *Scanner) getHardwareAddr(srcIP, dstIP net.IP) (net.HardwareAddr, error)
 		return nil, errors.New("not the same size")
 	}
 	// wait 2 seconds for reply
-	ihandle, err := pcap.NewInactiveHandle(s.iface.Device)
+	iHandle, err := pcap.NewInactiveHandle(s.iface.Device)
 	if err != nil {
 		return nil, err
 	}
-	defer ihandle.CleanUp()
-	_ = ihandle.SetSnapLen(snaplen)
-	_ = ihandle.SetPromisc(false)
-	_ = ihandle.SetTimeout(time.Second)
-	_ = ihandle.SetImmediateMode(true)
-	handle, err := ihandle.Activate()
+	defer iHandle.CleanUp()
+	_ = iHandle.SetSnapLen(snaplen)
+	_ = iHandle.SetPromisc(false)
+	_ = iHandle.SetTimeout(time.Second)
+	_ = iHandle.SetImmediateMode(true)
+	handle, err := iHandle.Activate()
 	if err != nil {
 		return nil, err
 	}

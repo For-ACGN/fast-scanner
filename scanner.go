@@ -37,8 +37,8 @@ type Scanner struct {
 	iface       *Interface // syn
 	route       *router
 	salt        []byte
-	sendQueue   chan []byte
-	recvQueue   chan []byte
+	sendQueue   chan []byte // sendPacket
+	recvQueue   chan []byte // synCapturer -> synParser
 	gatewayMACs map[string]net.HardwareAddr
 	gatewayMu   sync.Mutex
 	tokenBucket chan struct{} // rate
@@ -243,10 +243,10 @@ func (s *Scanner) Start() error {
 	case MethodConnect:
 		var localIPs []string
 		if s.opts.Device != "" {
-			iface, e := SelectInterface(s.opts.Device)
-			if e != nil {
+			iface, err := SelectInterface(s.opts.Device)
+			if err != nil {
 				s.Stop()
-				return e
+				return err
 			}
 			l := len(iface.IPNets)
 			localIPs = make([]string, l)
@@ -282,7 +282,6 @@ func (s *Scanner) Start() error {
 	}
 	s.wg.Add(1)
 	go s.addTokenLoop()
-
 	return err
 }
 

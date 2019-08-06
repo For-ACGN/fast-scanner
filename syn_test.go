@@ -119,7 +119,7 @@ func TestSynScanner_Raw(t *testing.T) {
 	ports := "80"
 	opt := Options{
 		Timeout: 5 * time.Second,
-		Rate:    3000,
+		Rate:    2800,
 		Raw:     true,
 	}
 	scanner, err := New(targets, ports, &opt)

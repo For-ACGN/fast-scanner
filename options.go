@@ -40,7 +40,7 @@ func (opt *Options) apply() {
 		case MethodConnect:
 			opt.Timeout = 5 * time.Second
 		case MethodSYN:
-			opt.Timeout = 2 * time.Second
+			opt.Timeout = 3 * time.Second
 		}
 	}
 	if opt.Workers < 1 {
