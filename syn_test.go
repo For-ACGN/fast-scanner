@@ -1,6 +1,7 @@
 package scanner
 
 import (
+	"runtime"
 	"testing"
 	"time"
 
@@ -9,10 +10,8 @@ import (
 
 func TestSynScanner(t *testing.T) {
 	start := time.Now()
-	// targets := "8.8.8.8-8.8.8.10, 2606:4700:4700::1001-2606:4700:4700::1003, "
-	// targets += "192.168.1.1-192.168.1.254, fe80::5cd1:6549:1d54:17dd"
-	targets := "8.8.8.8"
-	ports := "53"
+	targets := "8.8.8.8-8.8.8.10, 2606:4700:4700::1001-2606:4700:4700::1003"
+	ports := "53,54,55-57"
 	opt := Options{
 		Timeout: 5 * time.Second,
 		Rate:    2000,
@@ -24,28 +23,104 @@ func TestSynScanner(t *testing.T) {
 	require.NoError(t, err)
 	result := make(map[string]struct{})
 	for address := range scanner.Result {
-		if _, ok := result[address]; ok {
-			t.Log("duplicate:", address)
-			continue
-		}
 		result[address] = struct{}{}
 		t.Log(address)
 	}
-	t.Log("result", len(result), "time:", time.Since(start))
-	require.Equal(t, scanner.HostNumber().String(), scanner.generator.N.String())
-	require.Equal(t, scanner.ScannedNumber().String(), scanner.generator.N.String())
+	expected := []string{
+		"8.8.8.8:53",
+		"[2606:4700:4700::1001]:53",
+	}
+	for i := 0; i < len(expected); i++ {
+		if _, ok := result[expected[i]]; !ok {
+			t.Fatal(expected[i], "is lost")
+		}
+	}
+	t.Log("result:", len(result), "time:", time.Since(start))
+	require.Equal(t, scanner.HostNum().String(), "30")
+	require.Equal(t, scanner.Scanned().String(), "30")
 }
 
-func TestSynScannerDuplicate(t *testing.T) {
+func TestSynScanner_simple(t *testing.T) {
 	start := time.Now()
-	// targets := "8.8.8.8-8.8.8.10, 2606:4700:4700::1001-2606:4700:4700::1003"
-	// targets := "192.168.1.1-192.168.1.254"
+	targets := "127.0.0.1, ::1"
+	port := testListener(t)
+	scanner, err := New(targets, port, nil)
+	require.NoError(t, err)
+	err = scanner.Start()
+	require.NoError(t, err)
+	result := make(map[string]struct{})
+	for address := range scanner.Result {
+		result[address] = struct{}{}
+		t.Log(address)
+	}
+	expected := []string{
+		"127.0.0.1:" + port,
+		"[::1]:" + port,
+	}
+	for i := 0; i < len(expected); i++ {
+		if _, ok := result[expected[i]]; !ok {
+			t.Fatal(expected[i], "is lost")
+		}
+	}
+	t.Log("result:", len(result), "time:", time.Since(start))
+	require.Equal(t, scanner.HostNum().String(), "2")
+	require.Equal(t, scanner.Scanned().String(), "2")
+}
+
+func TestSynScanner_Stop(t *testing.T) {
+	targets := "8.8.8.8/16"
+	ports := "53,54,55-57"
+	opt := Options{
+		Timeout: 10 * time.Second,
+		Rate:    10,
+	}
+	scanner, err := New(targets, ports, &opt)
+	require.NoError(t, err)
+	err = scanner.Start()
+	require.NoError(t, err)
+	go func() {
+		err = scanner.Start()
+		require.Error(t, err)
+	}()
+	time.Sleep(2 * time.Second)
+	scanner.Stop()
+	go func() { scanner.Stop() }()
+	time.Sleep(250 * time.Millisecond)
+	require.Equal(t, 2, runtime.NumGoroutine())
+}
+
+func TestSynScanner_Duplicate(t *testing.T) {
+	start := time.Now()
 	targets := "123.206.1.1/16"
 	ports := "80"
 	opt := Options{
 		Timeout: 5 * time.Second,
-		Rate:    2000,
-		Workers: 16,
+		Rate:    30000,
+	}
+	scanner, err := New(targets, ports, &opt)
+	require.NoError(t, err)
+	err = scanner.Start()
+	require.NoError(t, err)
+	result := make(map[string]struct{})
+	for address := range scanner.Result {
+		if _, ok := result[address]; ok {
+			t.Fatal("duplicate:", address)
+		}
+		result[address] = struct{}{}
+	}
+	t.Log("result:", len(result), "time:", time.Since(start))
+	require.Equal(t, scanner.HostNum().String(), "65536")
+	require.Equal(t, scanner.Scanned().String(), "65536")
+}
+
+func TestSynScanner_Raw(t *testing.T) {
+	start := time.Now()
+	targets := "123.206.1.1/16"
+	ports := "80"
+	opt := Options{
+		Timeout: 5 * time.Second,
+		Rate:    3000,
+		Raw:     true,
 	}
 	scanner, err := New(targets, ports, &opt)
 	require.NoError(t, err)
@@ -59,9 +134,9 @@ func TestSynScannerDuplicate(t *testing.T) {
 		}
 		result[address] = struct{}{}
 	}
-	t.Log("result", len(result), "time:", time.Since(start))
-	require.Equal(t, scanner.HostNumber().String(), scanner.generator.N.String())
-	require.Equal(t, scanner.ScannedNumber().String(), scanner.generator.N.String())
+	t.Log("result:", len(result), "time:", time.Since(start))
+	require.Equal(t, scanner.HostNum().String(), "65536")
+	require.Equal(t, scanner.Scanned().String(), "65536")
 }
 
 func TestSynScannerAccuracy(t *testing.T) {

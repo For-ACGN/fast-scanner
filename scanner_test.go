@@ -18,7 +18,7 @@ func TestScanner_Stop(t *testing.T) {
 }
 
 func testnewScanner(t *testing.T) *Scanner {
-	_, port, _ := net.SplitHostPort(testListener(t))
+	port := testListener(t)
 	iface, err := SelectInterface("")
 	require.NoError(t, err)
 	host := iface.IPNets[0].IP.String()
@@ -45,5 +45,6 @@ func testListener(t *testing.T) string {
 			}(conn)
 		}
 	}()
-	return listener.Addr().String()
+	_, port, _ := net.SplitHostPort(listener.Addr().String())
+	return port
 }
