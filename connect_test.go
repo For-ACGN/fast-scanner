@@ -11,7 +11,7 @@ func TestConnectScanner(t *testing.T) {
 	targets := "8.8.8.8-8.8.8.10, 2606:4700:4700::1001-2606:4700:4700::1003"
 	opt := Options{
 		Method:  MethodConnect,
-		Timeout: 2 * time.Second,
+		Timeout: 3 * time.Second,
 	}
 	scanner, err := New(targets, "53,54,55-57", &opt)
 	require.NoError(t, err)

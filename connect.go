@@ -32,16 +32,13 @@ func (s *Scanner) connectScanner() {
 				address = "[" + ip.String() + "]:" + port
 			}
 			conn, err = s.dialer.Dial("tcp", address)
+			s.addScanned()
 			if err != nil {
-				s.addScanned()
 				continue
 			}
-			address = conn.RemoteAddr().String()
+			ip := conn.RemoteAddr().(*net.TCPAddr).IP
 			_ = conn.Close()
-			select {
-			case s.Result <- address:
-				s.addScanned()
-			case <-s.stopSignal:
+			if s.addResult(ip, port) {
 				return
 			}
 		}

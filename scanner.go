@@ -1,6 +1,7 @@
 package scanner
 
 import (
+	"encoding/binary"
 	"math/big"
 	"math/rand"
 	"net"
@@ -14,24 +15,32 @@ import (
 )
 
 type Scanner struct {
-	method      string
-	targets     []string
-	ports       map[string]struct{}
-	opts        *Options
-	generator   *Generator
-	hostNum     *big.Int
-	scannedNum  *big.Int
-	delta       *big.Int
-	numMu       sync.Mutex
-	dialer      *Dialer    // for connect and syn
-	iface       *Interface // for syn
+	method    string
+	targets   []string
+	ports     map[string]struct{}
+	opts      *Options
+	generator *Generator
+	// about count
+	hostNum    *big.Int
+	scannedNum *big.Int
+	delta      *big.Int
+	numMu      sync.Mutex
+	// about handle duplicate result
+	resultsv4   map[[net.IPv4len + 2]byte]struct{} // ip+port
+	resultsv4Mu sync.Mutex
+	resultsv6   map[[net.IPv6len + 2]byte]struct{}
+	resultsv6Mu sync.Mutex
+	// general
+	Result      chan string
+	dialer      *Dialer    // connect
+	iface       *Interface // syn
 	route       *router
 	salt        []byte
-	packetChan  chan []byte
+	sendQueue   chan []byte
+	recvQueue   chan []byte
 	gatewayMACs map[string]net.HardwareAddr
 	gatewayMu   sync.Mutex
-	tokenBucket chan struct{} // for rate
-	Result      chan string
+	tokenBucket chan struct{} // rate
 	startOnce   sync.Once
 	stopOnce    sync.Once
 	stopSignal  chan struct{}
@@ -59,6 +68,10 @@ func New(targets, ports string, opts *Options) (*Scanner, error) {
 		delta:       big.NewInt(1),
 		Result:      make(chan string, 16*opts.Workers),
 		stopSignal:  make(chan struct{}),
+	}
+	if !opts.Raw { // handle duplicate result
+		s.resultsv4 = make(map[[net.IPv4len + 2]byte]struct{})
+		s.resultsv6 = make(map[[net.IPv6len + 2]byte]struct{})
 	}
 	// set ports
 	for _, port := range split(ports) {
@@ -122,7 +135,8 @@ func (s *Scanner) Start() error {
 				s.Stop()
 				return
 			}
-			s.packetChan = make(chan []byte, 1024*s.opts.Workers)
+			s.sendQueue = make(chan []byte, 1024*s.opts.Workers)
+			s.recvQueue = make(chan []byte, 1024*s.opts.Workers)
 			s.gatewayMACs = make(map[string]net.HardwareAddr, 2)
 			// init salt for validate
 			random := rand.New(rand.NewSource(time.Now().UnixNano()))
@@ -136,6 +150,8 @@ func (s *Scanner) Start() error {
 				parHandle *pcap.Handle // parser
 				sanHanlde *pcap.Handle // scanner
 			)
+			// start packetSender
+
 			// start capturer
 			ihandle, err = pcap.NewInactiveHandle(s.iface.Device)
 			if err != nil {
@@ -192,6 +208,11 @@ func (s *Scanner) Start() error {
 				}
 				// close capturer
 				capHandle.Close()
+
+				// wait capturer
+
+				// close senders
+
 				s.wg.Done()
 			}()
 		case MethodConnect:
@@ -263,6 +284,63 @@ func (s *Scanner) addTokenLoop() {
 			return
 		}
 	}
+}
+
+// handle duplicate result
+func (s *Scanner) addResult(ip net.IP, port string) (stop bool) {
+	if s.opts.Raw {
+		var address string
+		if ipv4 := ip.To4(); ipv4 != nil {
+			address = ipv4.String() + ":" + port
+		} else {
+			address = "[" + ip.String() + "]:" + port
+		}
+		select {
+		case s.Result <- address:
+		case <-s.stopSignal:
+			stop = true
+		}
+	} else {
+		pn, _ := strconv.Atoi(port) // port number
+		pb := make([]byte, 2)       // port slice
+		binary.BigEndian.PutUint16(pb, uint16(pn))
+		if ipv4 := ip.To4(); ipv4 != nil { // ipv4
+			var array [net.IPv4len + 2]byte
+			copy(array[:], ipv4)
+			copy(array[net.IPv4len:], pb)
+			s.resultsv4Mu.Lock()
+			if _, ok := s.resultsv4[array]; ok {
+				s.resultsv4Mu.Unlock()
+			} else {
+				s.resultsv4[array] = struct{}{}
+				s.resultsv4Mu.Unlock()
+				// send result
+				select {
+				case s.Result <- ipv4.String() + ":" + port:
+				case <-s.stopSignal:
+					stop = true
+				}
+			}
+		} else { // ipv6
+			var array [net.IPv6len + 2]byte
+			copy(array[:], ip)
+			copy(array[net.IPv6len:], pb)
+			s.resultsv6Mu.Lock()
+			if _, ok := s.resultsv6[array]; ok {
+				s.resultsv6Mu.Unlock()
+			} else {
+				s.resultsv6[array] = struct{}{}
+				s.resultsv6Mu.Unlock()
+				// send result
+				select {
+				case s.Result <- "[" + ip.String() + "]:" + port:
+				case <-s.stopSignal:
+					stop = true
+				}
+			}
+		}
+	}
+	return
 }
 
 func (s *Scanner) addScanned() {
