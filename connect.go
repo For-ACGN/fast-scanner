@@ -10,6 +10,7 @@ func (s *Scanner) connectScanner() {
 		ip      net.IP
 		port    string
 		address string
+		conn    net.Conn
 		err     error
 	)
 	for {
@@ -30,11 +31,13 @@ func (s *Scanner) connectScanner() {
 			} else {
 				address = "[" + ip.String() + "]:" + port
 			}
-			address, err = s.dialer.Dial("tcp", address)
+			conn, err = s.dialer.Dial("tcp", address)
 			if err != nil {
 				s.addScanned()
 				continue
 			}
+			address = conn.RemoteAddr().String()
+			_ = conn.Close()
 			select {
 			case s.Result <- address:
 				s.addScanned()
