@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"net"
+	"runtime"
 	"strconv"
 	"sync"
 	"time"
@@ -18,6 +19,8 @@ const (
 	snaplen = 65536
 )
 
+// newSenderHandle will create a *pcap.Handle only for send
+// this handle will SetTimeout(1)
 func (s *Scanner) newSenderHandle() (*pcap.Handle, error) {
 	ihandle, err := pcap.NewInactiveHandle(s.iface.Device)
 	if err != nil {
@@ -31,15 +34,66 @@ func (s *Scanner) newSenderHandle() (*pcap.Handle, error) {
 	return ihandle.Activate()
 }
 
-func (s *Scanner) synCapturer(handle *pcap.Handle) {
-	defer s.wg.Done()
+// packetSender is used to control send packet rate
+// synParser & synScanner use it
+func (s *Scanner) packetSender(wg *sync.WaitGroup, handle *pcap.Handle) {
+	runtime.LockOSThread()
+	defer func() {
+		runtime.UnlockOSThread()
+		handle.Close()
+		wg.Done()
+	}()
+	var packet []byte
+	for {
+		select {
+		case packet = <-s.sendQueue:
+			if packet == nil {
+				return
+			}
+			_ = handle.WritePacketData(packet)
+		case <-s.stopSignal:
+			return
+		}
+	}
+}
+
+// send packet
+// must copy packet slice
+//
+// unexpected fault address 0x613412a
+// fatal error: fault
+// [signal 0xc0000005 code=0x0 addr=0x613412a pc=0x45ed82]
+func (s *Scanner) sendPacket(packet []byte) {
+	// rate
+	select {
+	case <-s.tokenBucket:
+	case <-s.stopSignal:
+		return
+	}
+	b := make([]byte, len(packet))
+	copy(b, packet)
+	select {
+	case s.sendQueue <- b:
+	case <-s.stopSignal:
+		return
+	}
+}
+
+func (s *Scanner) synCapturer(wg *sync.WaitGroup, handle *pcap.Handle) {
+	runtime.LockOSThread()
+	defer func() {
+		runtime.UnlockOSThread()
+		close(s.recvQueue) // synParser will close
+		wg.Done()
+	}()
 	var (
 		data []byte
 		err  error
 	)
-	// TODO _ = handle.SetBPFFilter("tcp[13] = 0x12") not support ipv6
+	// TODO BPFFilter for IPv6
+	//  _ = handle.SetBPFFilter("tcp[13] = 0x12")
+	//  is not support ipv6
 	_ = handle.SetBPFFilter("tcp")
-	defer close(s.packetChan) // synParser will close
 	for {
 		data, _, err = handle.ZeroCopyReadPacketData()
 		if err != nil {
@@ -47,14 +101,14 @@ func (s *Scanner) synCapturer(handle *pcap.Handle) {
 		}
 		d := make([]byte, len(data))
 		copy(d, data)
-		s.packetChan <- d
+		s.recvQueue <- d
 	}
 }
 
-func (s *Scanner) synParser(handle *pcap.Handle) {
+func (s *Scanner) synParser(wg *sync.WaitGroup, handle *pcap.Handle) {
 	defer func() {
 		handle.Close()
-		s.wg.Done()
+		wg.Done()
 	}()
 	var (
 		err     error
@@ -64,6 +118,7 @@ func (s *Scanner) synParser(handle *pcap.Handle) {
 		ipv6    layers.IPv6
 		tcp     layers.TCP
 		decoded []gopacket.LayerType
+		hash    []byte
 	)
 	parser := gopacket.NewDecodingLayerParser(layers.LayerTypeEthernet,
 		&eth, &ipv4, &ipv6, &tcp)
@@ -74,7 +129,8 @@ func (s *Scanner) synParser(handle *pcap.Handle) {
 		ComputeChecksums: true,
 	}
 	buf := gopacket.NewSerializeBuffer()
-	for data = range s.packetChan {
+	sha := sha256.New()
+	for data = range s.recvQueue {
 		err = parser.DecodeLayers(data, &decoded)
 		if err != nil {
 			continue
@@ -89,15 +145,17 @@ func (s *Scanner) synParser(handle *pcap.Handle) {
 			switch decoded[i] {
 			case layers.LayerTypeIPv4:
 				// check hash
-				sha := sha256.New()
+				sha.Reset()
 				sha.Write(ipv4.SrcIP)
 				sha.Write(s.salt)
-				hash := sha.Sum(nil)
+				hash = sha.Sum(nil)
 				// check port and ack
 				if uint16(tcp.DstPort) == binary.BigEndian.Uint16(hash[:2]) &&
 					tcp.Ack-1 == binary.BigEndian.Uint32(hash[2:6]) {
+					if s.addResult(ipv4.SrcIP, port) {
+						return
+					}
 					// send RST
-					result := ipv4.SrcIP.String() + ":" + port
 					// swap
 					eth.SrcMAC, eth.DstMAC = eth.DstMAC, eth.SrcMAC
 					ipv4.SrcIP, ipv4.DstIP = ipv4.DstIP, ipv4.SrcIP
@@ -112,29 +170,22 @@ func (s *Scanner) synParser(handle *pcap.Handle) {
 					// send packet
 					_ = tcp.SetNetworkLayerForChecksum(&ipv4)
 					_ = gopacket.SerializeLayers(buf, opt, &eth, &ipv4, &tcp)
-					// must copy
-					buffer := buf.Bytes()
-					b := make([]byte, len(buffer))
-					copy(b, buffer)
-					_ = handle.WritePacketData(b)
-					select {
-					case <-s.stopSignal:
-						return
-					case s.Result <- result:
-					}
+					s.sendPacket(buf.Bytes())
 				}
 				goto getNewData
 			case layers.LayerTypeIPv6:
 				// check hash
-				sha := sha256.New()
+				sha.Reset()
 				sha.Write(ipv6.SrcIP)
 				sha.Write(s.salt)
-				hash := sha.Sum(nil)
+				hash = sha.Sum(nil)
 				// check port and ack
 				if uint16(tcp.DstPort) == binary.BigEndian.Uint16(hash[:2]) &&
 					tcp.Ack-1 == binary.BigEndian.Uint32(hash[2:6]) {
+					if s.addResult(ipv6.SrcIP, port) {
+						return
+					}
 					// send RST
-					result := "[" + ipv6.SrcIP.String() + "]:" + port
 					// swap
 					eth.SrcMAC, eth.DstMAC = eth.DstMAC, eth.SrcMAC
 					ipv6.SrcIP, ipv6.DstIP = ipv6.DstIP, ipv6.SrcIP
@@ -149,16 +200,7 @@ func (s *Scanner) synParser(handle *pcap.Handle) {
 					// send packet
 					_ = tcp.SetNetworkLayerForChecksum(&ipv6)
 					_ = gopacket.SerializeLayers(buf, opt, &eth, &ipv6, &tcp)
-					// must copy
-					buffer := buf.Bytes()
-					b := make([]byte, len(buffer))
-					copy(b, buffer)
-					_ = handle.WritePacketData(b)
-					select {
-					case <-s.stopSignal:
-						return
-					case s.Result <- result:
-					}
+					s.sendPacket(buf.Bytes())
 				}
 				goto getNewData
 			}
@@ -240,15 +282,7 @@ func (s *Scanner) synScanner(wg *sync.WaitGroup, handle *pcap.Handle) {
 			_ = tcp.SetNetworkLayerForChecksum(&ipv6)
 			_ = gopacket.SerializeLayers(buf, opt, &eth, &ipv6, &tcp)
 		}
-		// send packet
-		// must copy
-		// unexpected fault address 0x613412a
-		// fatal error: fault
-		// [signal 0xc0000005 code=0x0 addr=0x613412a pc=0x45ed82]
-		buffer := buf.Bytes()
-		b := make([]byte, len(buffer))
-		copy(b, buffer)
-		_ = handle.WritePacketData(b)
+		s.sendPacket(buf.Bytes())
 	}
 	portsLen := len(s.ports)
 	for {
@@ -259,11 +293,6 @@ func (s *Scanner) synScanner(wg *sync.WaitGroup, handle *pcap.Handle) {
 				return
 			}
 			for port = range s.ports {
-				select {
-				case <-s.tokenBucket:
-				case <-s.stopSignal:
-					return
-				}
 				// check target
 				if target.Equal(net.IPv4bcast) ||
 					target.IsUnspecified() ||
@@ -306,17 +335,13 @@ func (s *Scanner) simpleScan(ip net.IP, port string) {
 	}
 	dialer := net.Dialer{Timeout: s.opts.Timeout}
 	conn, err := dialer.Dial("tcp", address)
+	s.addScanned()
 	if err != nil {
-		s.addScanned()
 		return
 	}
-	address = conn.RemoteAddr().String()
+	dsrIP := conn.RemoteAddr().(*net.TCPAddr).IP
 	_ = conn.Close()
-	select {
-	case <-s.stopSignal:
-	case s.Result <- address:
-		s.addScanned()
-	}
+	s.addResult(dsrIP, port)
 }
 
 func (s *Scanner) getGatewayHardwareAddr(srcIP, gateway net.IP) (net.HardwareAddr, error) {
