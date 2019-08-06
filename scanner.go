@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/gopacket/pcap"
@@ -30,7 +31,7 @@ type Scanner struct {
 	resultsv4Mu sync.Mutex
 	resultsv6   map[[net.IPv6len + 2]byte]struct{}
 	resultsv6Mu sync.Mutex
-	// general
+	// about scanning
 	Result      chan string
 	dialer      *Dialer    // connect
 	iface       *Interface // syn
@@ -41,10 +42,12 @@ type Scanner struct {
 	gatewayMACs map[string]net.HardwareAddr
 	gatewayMu   sync.Mutex
 	tokenBucket chan struct{} // rate
-	startOnce   sync.Once
-	stopOnce    sync.Once
-	stopSignal  chan struct{}
-	wg          sync.WaitGroup
+	// control
+	started    int32
+	stopped    int32
+	stopSignal chan struct{}
+	closeOnce  sync.Once
+	wg         sync.WaitGroup
 }
 
 func New(targets, ports string, opts *Options) (*Scanner, error) {
@@ -109,167 +112,196 @@ func New(targets, ports string, opts *Options) (*Scanner, error) {
 }
 
 func (s *Scanner) Start() error {
+	if !atomic.CompareAndSwapInt32(&s.started, 0, 1) {
+		return errors.New("started")
+	}
 	var err error
-	s.startOnce.Do(func() {
-		s.generator, err = NewGenerator(s.targets)
-		if err != nil {
-			return
-		}
-		// calculate host number
-		n := s.generator.N
-		s.hostNum = n.Mul(n, big.NewInt(int64(len(s.ports))))
-		switch s.method {
-		case MethodSYN:
-			if initErr != nil {
-				err = initErr
-				s.Stop()
-				return
-			}
-			s.iface, err = SelectInterface(s.opts.Device)
-			if err != nil {
-				s.Stop()
-				return
-			}
-			s.route, err = newRouter(s.iface)
-			if err != nil {
-				s.Stop()
-				return
-			}
-			s.sendQueue = make(chan []byte, 1024*s.opts.Workers)
-			s.recvQueue = make(chan []byte, 1024*s.opts.Workers)
-			s.gatewayMACs = make(map[string]net.HardwareAddr, 2)
-			// init salt for validate
-			random := rand.New(rand.NewSource(time.Now().UnixNano()))
-			s.salt = make([]byte, 16)
-			for i := 0; i < 16; i++ {
-				s.salt[i] = byte(random.Intn(256))
-			}
-			var (
-				ihandle   *pcap.InactiveHandle
-				capHandle *pcap.Handle // capturer
-				parHandle *pcap.Handle // parser
-				sanHanlde *pcap.Handle // scanner
-			)
-			// start packetSender
-
-			// start capturer
-			ihandle, err = pcap.NewInactiveHandle(s.iface.Device)
-			if err != nil {
-				s.Stop()
-				return
-			}
-			_ = ihandle.SetSnapLen(snaplen)
-			_ = ihandle.SetPromisc(false)
-			_ = ihandle.SetTimeout(pcap.BlockForever)
-			_ = ihandle.SetImmediateMode(true)
-			capHandle, err = ihandle.Activate()
-			ihandle.CleanUp()
-			if err != nil {
-				s.Stop()
-				return
-			}
-			s.wg.Add(1)
-			go s.synCapturer(capHandle)
-			// start parser
-			for i := 0; i < s.opts.Workers; i++ {
-				parHandle, err = s.newSenderHandle()
-				if err != nil {
-					capHandle.Close()
-					s.Stop()
-					return
-				}
-				s.wg.Add(1)
-				go s.synParser(parHandle)
-			}
-			// wait to prepare read
-			time.Sleep(250 * time.Millisecond)
-			// start scanner
-			scannerWG := new(sync.WaitGroup)
-			for i := 0; i < s.opts.Workers; i++ {
-				sanHanlde, err = s.newSenderHandle()
-				if err != nil {
-					capHandle.Close()
-					s.Stop()
-					return
-				}
-				scannerWG.Add(1)
-				go s.synScanner(scannerWG, sanHanlde)
-				time.Sleep(10 * time.Millisecond)
-			}
-			// wait finish
-			s.wg.Add(1)
-			go func() {
-				// wait scanner
-				scannerWG.Wait()
-				select {
-				case <-s.stopSignal: // stop
-				default: // send finish and wait
-					time.Sleep(s.opts.Timeout)
-				}
-				// close capturer
-				capHandle.Close()
-
-				// wait capturer
-
-				// close senders
-
-				s.wg.Done()
-			}()
-		case MethodConnect:
-			var localIPs []string
-			if s.opts.Device != "" {
-				iface, e := SelectInterface(s.opts.Device)
-				if e != nil {
-					err = e
-					s.Stop()
-					return
-				}
-				l := len(iface.IPNets)
-				localIPs = make([]string, l)
-				for i := 0; i < l; i++ {
-					localIPs[i] = iface.IPNets[i].IP.String()
-				}
-			}
-			s.dialer, err = NewDialer(localIPs, s.opts.Timeout)
-			if err != nil {
-				s.Stop()
-				return
-			}
-			for i := 0; i < s.opts.Workers; i++ {
-				s.wg.Add(1)
-				go s.connectScanner()
-			}
-		default:
-			err = errors.New("invalid method")
+	s.generator, err = NewGenerator(s.targets)
+	if err != nil {
+		return err
+	}
+	// calculate host number
+	n := s.generator.N
+	s.hostNum = n.Mul(n, big.NewInt(int64(len(s.ports))))
+	switch s.method {
+	case MethodSYN:
+		if initErr != nil {
 			s.Stop()
-			return
+			return initErr
 		}
-		// token bucket
-		go s.addTokenLoop() // not set wg
-		// wait to finish
+		s.iface, err = SelectInterface(s.opts.Device)
+		if err != nil {
+			s.Stop()
+			return err
+		}
+		s.route, err = newRouter(s.iface)
+		if err != nil {
+			s.Stop()
+			return err
+		}
+		s.sendQueue = make(chan []byte, 1024*s.opts.Workers)
+		s.recvQueue = make(chan []byte, 1024*s.opts.Workers)
+		s.gatewayMACs = make(map[string]net.HardwareAddr, 2)
+		// init salt for validate
+		random := rand.New(rand.NewSource(time.Now().UnixNano()))
+		s.salt = make([]byte, 16)
+		for i := 0; i < 16; i++ {
+			s.salt[i] = byte(random.Intn(256))
+		}
+		var (
+			sendersWG  sync.WaitGroup
+			parsersWG  sync.WaitGroup
+			scannersWG sync.WaitGroup
+		)
+		errWait := func() {
+			sendersWG.Wait()
+			parsersWG.Wait()
+			scannersWG.Wait()
+		}
+		// start packetSenders
+		for i := 0; i < s.opts.Senders; i++ {
+			handle, err := s.newSenderHandle()
+			if err != nil {
+				s.Stop()
+				errWait()
+				return err
+			}
+			sendersWG.Add(1)
+			go s.packetSender(&sendersWG, handle)
+		}
+		// start capturer
+		iHandle, err := pcap.NewInactiveHandle(s.iface.Device)
+		if err != nil {
+			s.Stop()
+			errWait()
+			return err
+		}
+		_ = iHandle.SetSnapLen(snaplen)
+		_ = iHandle.SetPromisc(false)
+		_ = iHandle.SetTimeout(pcap.BlockForever)
+		_ = iHandle.SetImmediateMode(true)
+		capHandle, err := iHandle.Activate()
+		iHandle.CleanUp()
+		if err != nil {
+			s.Stop()
+			errWait()
+			return err
+		}
+		parsersWG.Add(1)
+		go s.synCapturer(&parsersWG, capHandle)
+		// start parsers
+		for i := 0; i < s.opts.Workers; i++ {
+			handle, err := s.newSenderHandle()
+			if err != nil {
+				capHandle.Close()
+				s.Stop()
+				errWait()
+				return err
+			}
+			parsersWG.Add(1)
+			go s.synParser(&parsersWG, handle)
+		}
+		// wait to prepare read
+		time.Sleep(250 * time.Millisecond)
+		// start scanners
+		for i := 0; i < s.opts.Workers; i++ {
+			handle, err := s.newSenderHandle()
+			if err != nil {
+				capHandle.Close()
+				s.Stop()
+				errWait()
+				return err
+			}
+			scannersWG.Add(1)
+			go s.synScanner(&scannersWG, handle)
+		}
+		// wait
+		s.wg.Add(1)
 		go func() {
-			s.wg.Wait()
-			close(s.Result)
-			s.stopOnce.Do(func() {
+			// wait scanner
+			scannersWG.Wait()
+			// check is s.Stop() or send finish
+			select {
+			case <-s.stopSignal:
+			default: // send finish and wait
+				time.Sleep(s.opts.Timeout)
+			}
+			// close capturer
+			capHandle.Close()
+			// wait parsers
+			parsersWG.Wait()
+			// wait senders
+			close(s.sendQueue)
+			sendersWG.Wait()
+			// wait addTokenLoop return
+			s.closeOnce.Do(func() {
 				close(s.stopSignal)
 			})
+			s.wg.Done()
+			close(s.Result)
 		}()
-	})
+	case MethodConnect:
+		var localIPs []string
+		if s.opts.Device != "" {
+			iface, e := SelectInterface(s.opts.Device)
+			if e != nil {
+				s.Stop()
+				return e
+			}
+			l := len(iface.IPNets)
+			localIPs = make([]string, l)
+			for i := 0; i < l; i++ {
+				localIPs[i] = iface.IPNets[i].IP.String()
+			}
+		}
+		s.dialer, err = NewDialer(localIPs, s.opts.Timeout)
+		if err != nil {
+			s.Stop()
+			return err
+		}
+		workersWG := sync.WaitGroup{}
+		for i := 0; i < s.opts.Workers; i++ {
+			workersWG.Add(1)
+			go s.connectScanner(&workersWG)
+		}
+		// wait
+		s.wg.Add(1)
+		go func() {
+			// wait connectScanners
+			workersWG.Wait()
+			// wait addTokenLoop return
+			s.closeOnce.Do(func() {
+				close(s.stopSignal)
+			})
+			s.wg.Done()
+			close(s.Result)
+		}()
+	default:
+		s.Stop()
+		return errors.New("invalid method")
+	}
+	s.wg.Add(1)
+	go s.addTokenLoop()
+
 	return err
 }
 
 func (s *Scanner) Stop() {
-	s.stopOnce.Do(func() {
+	if atomic.CompareAndSwapInt32(&s.stopped, 0, 1) {
 		s.generator.Close()
-		close(s.stopSignal)
+		s.closeOnce.Do(func() {
+			close(s.stopSignal)
+		})
 		s.wg.Wait()
-	})
+	}
 }
 
-// auto return
 func (s *Scanner) addTokenLoop() {
 	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
+	defer func() {
+		ticker.Stop()
+		s.wg.Done()
+	}()
 	for {
 		select {
 		case <-ticker.C:
@@ -349,13 +381,13 @@ func (s *Scanner) addScanned() {
 	s.numMu.Unlock()
 }
 
-func (s *Scanner) HostNumber() *big.Int {
+func (s *Scanner) HostNum() *big.Int {
 	n := big.Int{}
 	n.SetBytes(s.hostNum.Bytes())
 	return &n
 }
 
-func (s *Scanner) ScannedNumber() *big.Int {
+func (s *Scanner) Scanned() *big.Int {
 	n := big.Int{}
 	s.numMu.Lock()
 	n.SetBytes(s.scannedNum.Bytes())
