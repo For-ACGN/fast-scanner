@@ -2,10 +2,11 @@ package scanner
 
 import (
 	"net"
+	"sync"
 )
 
-func (s *Scanner) connectScanner() {
-	defer s.wg.Done()
+func (s *Scanner) connectScanner(wg *sync.WaitGroup) {
+	defer wg.Done()
 	var (
 		ip      net.IP
 		port    string
