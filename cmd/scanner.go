@@ -11,23 +11,24 @@ import (
 	"scanner"
 )
 
-func main() {
-	var (
-		targets string
-		ports   string
-		method  string
-		device  string
-		rate    int
-		timeout time.Duration
-		workers int
-		senders int
-		save    string
-	)
-	targetsUsage := bytes.Buffer{}
-	targetsUsage.WriteString("192.168.1.1, fe80::1\n")
-	targetsUsage.WriteString("192.168.1.1-192.168.1.3, fe80::1-fe80::1\n")
-	targetsUsage.WriteString("192.168.1.1/24")
-	flag.StringVar(&targets, "targets", "", targetsUsage.String())
+var (
+	targets string
+	ports   string
+	method  string
+	device  string
+	rate    int
+	timeout time.Duration
+	workers int
+	senders int
+	save    string
+)
+
+func init() {
+	tu := bytes.Buffer{}
+	tu.WriteString("192.168.1.1, fe80::1\n")
+	tu.WriteString("192.168.1.1-192.168.1.3, fe80::1-fe80::1\n")
+	tu.WriteString("192.168.1.1/24")
+	flag.StringVar(&targets, "targets", "", tu.String())
 	flag.StringVar(&ports, "ports", "", "80, 81-82")
 	flag.StringVar(&method, "method", scanner.MethodSYN, "connect or syn")
 	flag.StringVar(&device, "device", "", "interface name Ethernet0, eth0")
@@ -35,8 +36,11 @@ func main() {
 	flag.DurationVar(&timeout, "timeout", 5*time.Second, "timeout")
 	flag.IntVar(&workers, "workers", 0, "scanner number")
 	flag.IntVar(&senders, "senders", 0, "packet sender number")
-	flag.StringVar(&save, "save", "", "save scan result")
+	flag.StringVar(&save, "save", "", "result file path")
 	flag.Parse()
+}
+
+func main() {
 	opts := scanner.Options{
 		Method:  method,
 		Device:  device,
