@@ -180,6 +180,7 @@ func (s *Scanner) Start() error {
 		_ = iHandle.SetPromisc(false)
 		_ = iHandle.SetTimeout(pcap.BlockForever)
 		_ = iHandle.SetImmediateMode(true)
+		_ = iHandle.SetBufferSize(16 * 1048576) // 16 MB
 		capHandle, err := iHandle.Activate()
 		iHandle.CleanUp()
 		if err != nil {
@@ -191,29 +192,15 @@ func (s *Scanner) Start() error {
 		go s.synCapturer(&parsersWG, capHandle)
 		// start parsers
 		for i := 0; i < s.opts.Workers; i++ {
-			handle, err := s.newSenderHandle()
-			if err != nil {
-				capHandle.Close()
-				s.Stop()
-				errWait()
-				return err
-			}
 			parsersWG.Add(1)
-			go s.synParser(&parsersWG, handle)
+			go s.synParser(&parsersWG)
 		}
 		// wait to prepare read
 		time.Sleep(250 * time.Millisecond)
 		// start scanners
 		for i := 0; i < s.opts.Workers; i++ {
-			handle, err := s.newSenderHandle()
-			if err != nil {
-				capHandle.Close()
-				s.Stop()
-				errWait()
-				return err
-			}
 			scannersWG.Add(1)
-			go s.synScanner(&scannersWG, handle)
+			go s.synScanner(&scannersWG)
 		}
 		// wait
 		s.wg.Add(1)

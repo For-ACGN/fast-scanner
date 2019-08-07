@@ -105,11 +105,8 @@ func (s *Scanner) synCapturer(wg *sync.WaitGroup, handle *pcap.Handle) {
 	}
 }
 
-func (s *Scanner) synParser(wg *sync.WaitGroup, handle *pcap.Handle) {
-	defer func() {
-		handle.Close()
-		wg.Done()
-	}()
+func (s *Scanner) synParser(wg *sync.WaitGroup) {
+	defer wg.Done()
 	var (
 		err     error
 		data    []byte
@@ -209,11 +206,8 @@ func (s *Scanner) synParser(wg *sync.WaitGroup, handle *pcap.Handle) {
 	}
 }
 
-func (s *Scanner) synScanner(wg *sync.WaitGroup, handle *pcap.Handle) {
-	defer func() {
-		handle.Close()
-		wg.Done()
-	}()
+func (s *Scanner) synScanner(wg *sync.WaitGroup) {
+	defer wg.Done()
 	var (
 		target  net.IP
 		port    string
