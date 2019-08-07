@@ -31,7 +31,7 @@ func (c *cracker) Do() {
 			if address == "" {
 				return
 			}
-			err = c.connectSocks5(address, "", "")
+			err = c.connect(address, "", "")
 			if err == nil {
 				log.Print(address + "\r\n")
 			}
@@ -56,13 +56,12 @@ var (
 	errNoAcceptableMethods = errors.New("no acceptable authentication methods")
 )
 
-func (c *cracker) connectSocks5(address, username, password string) error {
+func (c *cracker) connect(address, username, password string) error {
 	conn, err := c.dialer.Dial("tcp", address)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = conn.Close() }()
-	_ = conn.SetDeadline(time.Now().Add(2 * timeout))
 	// request authentication
 	buffer := bytes.Buffer{}
 	buffer.WriteByte(version5)
@@ -74,11 +73,13 @@ func (c *cracker) connectSocks5(address, username, password string) error {
 		buffer.WriteByte(notRequired)
 		buffer.WriteByte(usernamePassword)
 	}
+	_ = conn.SetWriteDeadline(time.Now().Add(timeout))
 	_, err = conn.Write(buffer.Bytes())
 	if err != nil {
 		return err
 	}
 	resp := make([]byte, 2)
+	_ = conn.SetReadDeadline(time.Now().Add(timeout))
 	_, err = io.ReadFull(conn, resp)
 	if err != nil {
 		return err
@@ -104,19 +105,21 @@ func (c *cracker) connectSocks5(address, username, password string) error {
 		buffer.WriteString(username)
 		buffer.WriteByte(byte(len(password)))
 		buffer.WriteString(password)
-		_, err := conn.Write(buffer.Bytes())
+		_ = conn.SetWriteDeadline(time.Now().Add(timeout))
+		_, err = conn.Write(buffer.Bytes())
 		if err != nil {
 			return err
 		}
-		response := make([]byte, 2)
-		_, err = io.ReadFull(conn, response)
+		resp = make([]byte, 2)
+		_ = conn.SetReadDeadline(time.Now().Add(timeout))
+		_, err = io.ReadFull(conn, resp)
 		if err != nil {
 			return err
 		}
-		if response[0] != usernamePasswordVersion {
+		if resp[0] != usernamePasswordVersion {
 			return errors.New("invalid username/password version")
 		}
-		if response[1] != statusSucceeded {
+		if resp[1] != statusSucceeded {
 			return errors.New("invalid username/password")
 		}
 	default:
