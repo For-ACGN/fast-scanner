@@ -11,19 +11,27 @@ import (
 	"scanner"
 )
 
-var (
-	targets string
-	ports   string
-	method  string
-	device  string
-	rate    int
-	timeout time.Duration
-	workers int
-	senders int
-	save    string
-)
+type logger struct {
+	file *os.File
+}
 
-func init() {
+func (l *logger) Write(p []byte) (n int, err error) {
+	_, _ = os.Stderr.Write(p)
+	return l.file.Write(p)
+}
+
+func main() {
+	var (
+		targets string
+		ports   string
+		method  string
+		device  string
+		rate    int
+		timeout time.Duration
+		workers int
+		senders int
+		save    string
+	)
 	tu := bytes.Buffer{}
 	tu.WriteString("192.168.1.1, fe80::1\n")
 	tu.WriteString("192.168.1.1-192.168.1.3, fe80::1-fe80::1\n")
@@ -38,9 +46,6 @@ func init() {
 	flag.IntVar(&senders, "senders", 0, "packet sender number")
 	flag.StringVar(&save, "save", "", "result file path")
 	flag.Parse()
-}
-
-func main() {
 	opts := scanner.Options{
 		Method:  method,
 		Device:  device,
@@ -52,16 +57,15 @@ func main() {
 	if save != "" {
 		file, err := os.OpenFile(save, os.O_CREATE|os.O_APPEND, 644)
 		if err != nil {
-			log.Println(err)
-			return
+			log.Fatalln(err)
 		}
 		log.SetOutput(&logger{file: file})
 	}
-	start := time.Now()
 	s, err := scanner.New(targets, ports, &opts)
 	if err != nil {
 		log.Fatalln(err)
 	}
+	start := time.Now()
 	err = s.Start()
 	if err != nil {
 		log.Fatalln(err)
@@ -79,13 +83,4 @@ func main() {
 		log.Print(address + "\r\n")
 	}
 	log.Printf("scan finished. total: %d time: %s\r\n", scanned, time.Since(start))
-}
-
-type logger struct {
-	file *os.File
-}
-
-func (l *logger) Write(p []byte) (n int, err error) {
-	_, _ = os.Stderr.Write(p)
-	return l.file.Write(p)
 }
