@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"flag"
 	"log"
@@ -13,21 +14,35 @@ import (
 	"scanner"
 )
 
-var (
-	targets  string
-	ports    string
-	method   string
-	device   string
-	rate     int
-	timeout  time.Duration
-	workers  int
-	senders  int
-	save     string
-	crackers int
-	password string
-)
+type auth struct {
+	Username string
+	Password string
+}
 
-func init() {
+type logger struct {
+	file *os.File
+}
+
+func (l *logger) Write(p []byte) (n int, err error) {
+	_, _ = os.Stderr.Write(p)
+	return l.file.Write(p)
+}
+
+func main() {
+	var (
+		targets  string
+		ports    string
+		method   string
+		device   string
+		rate     int
+		timeout  time.Duration
+		workers  int
+		senders  int
+		save     string
+		crackers int
+		username string
+		password string
+	)
 	tu := bytes.Buffer{}
 	tu.WriteString("192.168.1.1, fe80::1\n")
 	tu.WriteString("192.168.1.1-192.168.1.3, fe80::1-fe80::1\n")
@@ -42,11 +57,9 @@ func init() {
 	flag.IntVar(&senders, "senders", 0, "packet sender number")
 	flag.StringVar(&save, "save", "", "result file path")
 	flag.IntVar(&crackers, "crackers", 16*runtime.NumCPU(), "crackers number")
+	flag.StringVar(&username, "username", "", "username file fath")
 	flag.StringVar(&password, "password", "", "password file fath")
 	flag.Parse()
-}
-
-func main() {
 	opts := scanner.Options{
 		Method:  method,
 		Device:  device,
@@ -63,11 +76,69 @@ func main() {
 		}
 		log.SetOutput(&logger{file: file})
 	}
-	start := time.Now()
+	// read username password
+	var (
+		usernames []string
+		passwords []string
+	)
+	if username != "" {
+		file, err := os.Open(username)
+		if err != nil {
+			log.Println(err)
+			return
+		}
+		reader := bufio.NewReader(file)
+		for {
+			username, _, err := reader.ReadLine()
+			if err != nil {
+				break
+			}
+			if username != nil {
+				usernames = append(usernames, string(username))
+			}
+		}
+	}
+	if password != "" {
+		file, err := os.Open(password)
+		if err != nil {
+			log.Println(err)
+			return
+		}
+		reader := bufio.NewReader(file)
+		for {
+			password, _, err := reader.ReadLine()
+			if err != nil {
+				break
+			}
+			if password != nil {
+				passwords = append(passwords, string(password))
+			}
+		}
+	}
+	// make password directory
+	usernamesLen := len(usernames)
+	passwordsLen := len(passwords)
+	authsLen := usernamesLen * (passwordsLen + 1)
+	auths := make([]*auth, authsLen) // NULL
+	index := 0
+	for i := 0; i < usernamesLen; i++ {
+		// add NULL
+		auths[index] = &auth{Username: usernames[i]}
+		index += 1
+		for j := 0; j < len(passwords); j++ {
+			auths[index] = &auth{
+				Username: usernames[i],
+				Password: passwords[j],
+			}
+			index += 1
+		}
+	}
+	// init scanner
 	s, err := scanner.New(targets, ports, &opts)
 	if err != nil {
 		log.Fatalln(err)
 	}
+	start := time.Now()
 	err = s.Start()
 	if err != nil {
 		log.Fatalln(err)
@@ -103,6 +174,9 @@ func main() {
 		c := cracker{
 			address:    s.Result,
 			dialer:     dialer,
+			timeout:    timeout,
+			auths:      auths,
+			authsLen:   authsLen,
 			stopSignal: stopSignal,
 			wg:         &wg,
 		}
@@ -111,13 +185,4 @@ func main() {
 	}
 	wg.Wait()
 	log.Printf("scan finished. time: %s\r\n", time.Since(start))
-}
-
-type logger struct {
-	file *os.File
-}
-
-func (l *logger) Write(p []byte) (n int, err error) {
-	_, _ = os.Stderr.Write(p)
-	return l.file.Write(p)
 }
