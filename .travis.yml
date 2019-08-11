@@ -12,6 +12,6 @@ script:
   #go test dialer_test.go
   #go test connect_test.go
   #go test interface_test.go
-  sudo go test -test.run ^TestSynScanner$
-  sudo go test -test.run ^TestSynScanner_simple$
-  sudo go test -test.run ^TestSynScanner_Stop$
+  - sudo go test -test.run ^TestSynScanner$
+  - sudo go test -test.run ^TestSynScanner_simple$
+  - sudo go test -test.run ^TestSynScanner_Stop$
