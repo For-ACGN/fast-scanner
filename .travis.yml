@@ -6,13 +6,13 @@ sudo: true
 env:
   - GO111MODULE=on
 install:
-  - apt-get install libpcap
-  - apt-get install libpcap-dev
+  - sudo apt-get install libpcap
+  - sudo apt-get install libpcap-dev
 script:
   #go test generator_test.go
   #go test dialer_test.go
   #go test connect_test.go
   #go test interface_test.go
-  go test -test.run ^TestSynScanner$
-  go test -test.run ^TestSynScanner_simple$
-  go test -test.run ^TestSynScanner_Stop$
+  sudo go test -test.run ^TestSynScanner$
+  sudo go test -test.run ^TestSynScanner_simple$
+  sudo go test -test.run ^TestSynScanner_Stop$
