@@ -6,8 +6,7 @@ sudo: true
 env:
   - GO111MODULE=on
 install:
-  - sudo apt-get install libpcap
-  - sudo apt-get install libpcap-dev
+  - sudo apt-get -y install libpcap-dev
 script:
   #go test generator_test.go
   #go test dialer_test.go
