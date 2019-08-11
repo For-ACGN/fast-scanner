@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"scanner"
+	"github.com/For-ACGN/fast-scanner"
 )
 
 type cracker struct {

@@ -1,4 +1,4 @@
-module scanner
+module github.com/For-ACGN/fast-scanner
 
 go 1.12
 

@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"scanner"
+	"github.com/For-ACGN/fast-scanner"
 )
 
 type auth struct {
@@ -150,7 +150,7 @@ func main() {
 		signal.Notify(signalChan, os.Kill, os.Interrupt)
 		<-signalChan
 		s.Stop()
-		stopSignal <- struct{}{}
+		close(stopSignal)
 		wg.Wait()
 		log.Print("stop scanner.\r\n")
 	}()

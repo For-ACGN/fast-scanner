@@ -8,7 +8,7 @@ import (
 	"os/signal"
 	"time"
 
-	"scanner"
+	"github.com/For-ACGN/fast-scanner"
 )
 
 type logger struct {
