@@ -6,8 +6,8 @@ sudo: true
 env:
   - GO111MODULE=on
 install:
-  - yum install libpcap
-  - yum install libpcap-devel
+  - apt-get install libpcap
+  - apt-get install libpcap-dev
 script:
   #go test generator_test.go
   #go test dialer_test.go
