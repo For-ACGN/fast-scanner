@@ -1,0 +1,16 @@
+language: go
+go:
+  - 1.12.x
+  - 1.11.x
+sudo: true
+env:
+  - GO111MODULE=on
+install:
+  - yum install libpcap
+  - yum install libpcap-devel
+script:
+  go test generator_test.go
+  go test dialer_test.go
+  go test connect_test.go
+  go test interface_test.go
+  #go test syn_test.go
