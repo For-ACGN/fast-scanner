@@ -5,13 +5,8 @@ go:
 sudo: true
 env:
   - GO111MODULE=on
-install:
+before_install:
   - sudo apt-get -y install libpcap-dev
 script:
-  #go test generator_test.go
-  #go test dialer_test.go
-  #go test connect_test.go
-  #go test interface_test.go
-  - go test -test.run ^TestSynScanner$
-  - go test -test.run ^TestSynScanner_simple$
-  - go test -test.run ^TestSynScanner_Stop$
+  - chmod +x .linux-test-su.sh
+  - sudo ./.linux-test-su.sh $GOPATH `which go`
