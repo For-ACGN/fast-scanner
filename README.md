@@ -31,7 +31,7 @@ Options:
 ``````
 ## Example
 ``````go
-s, err := scanner.New("1.1.1.1-1.1.1.2", "53-54", nil)
+s, err := scanner.New("1.1.1.1-1.1.1.2, 2606:4700:4700::1001", "53-54", nil)
 if err != nil {
     log.Fatalln(err)
 }
@@ -49,9 +49,9 @@ for address := range s.Result {
 ``````
 ## TODO
 ``````
-1.target support ipv6 CIDR
-2.BPFFilter for IPv6
-  _ = handle.SetBPFFilter("tcp[13] = 0x12")
-  is not support ipv6
-3.PF_RING
+1. target support ipv6 CIDR
+2. BPFFilter for IPv6
+     _ = handle.SetBPFFilter("tcp[13] = 0x12")
+     is not support ipv6
+3. PF_RING
 ``````
