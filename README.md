@@ -49,9 +49,9 @@ for address := range s.Result {
 ``````
 ## TODO
 ``````
-1. target support ipv6 CIDR
+1. target support IPv6 CIDR
 2. BPFFilter for IPv6
      _ = handle.SetBPFFilter("tcp[13] = 0x12")
-     is not support ipv6
+     is not support IPv6
 3. PF_RING
 ``````
