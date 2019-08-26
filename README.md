@@ -11,13 +11,18 @@ fast-scanner can make it easy for you to develop scanners
 * Support IPv4 & IPv6
 * Support Windows & Linux
 * Scan result is a string channal
-## Install
+## Dependence
 ``````
 windows: 
   Winpcap or Npcap
 linux:
   apt-get libpcap-dev
   yum install libpcap-devel
+``````
+## Install
+``````sh
+wget https://github.com/For-ACGN/fast-scanner/install.sh
+chmod +x install.sh && ./install.sh
 ``````
 ## Parameter
 ``````
