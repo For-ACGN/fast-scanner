@@ -48,7 +48,7 @@ func main() {
 	tu.WriteString("192.168.1.1-192.168.1.3, fe80::1-fe80::1\n")
 	tu.WriteString("192.168.1.1/24")
 	flag.StringVar(&targets, "h", "", tu.String())
-	flag.StringVar(&ports, "p", "", "ports: 80, 81-82")
+	flag.StringVar(&ports, "p", "1080", "ports: 1080, 1081-1082")
 	flag.StringVar(&method, "m", scanner.MethodSYN, "method connect or syn")
 	flag.StringVar(&device, "d", "", "device: interface name Ethernet0, eth0")
 	flag.IntVar(&rate, "r", 1000, "send packet rate")
