@@ -147,29 +147,32 @@ func (s *Scanner) synParser(wg *sync.WaitGroup) {
 				sha.Write(s.salt)
 				hash = sha.Sum(nil)
 				// check port and ack
-				if uint16(tcp.DstPort) == binary.BigEndian.Uint16(hash[:2]) &&
-					tcp.Ack-1 == binary.BigEndian.Uint32(hash[2:6]) {
-					if s.addResult(ipv4.SrcIP, port) {
-						return
-					}
-					// send RST
-					// swap
-					eth.SrcMAC, eth.DstMAC = eth.DstMAC, eth.SrcMAC
-					ipv4.SrcIP, ipv4.DstIP = ipv4.DstIP, ipv4.SrcIP
-					tcp.SrcPort, tcp.DstPort = tcp.DstPort, tcp.SrcPort
-					// tcp.Seq = tcp.Ack
-					// tcp.Ack = 0
-					tcp.Seq, tcp.Ack = tcp.Ack, tcp.Seq+1
-					// set flag
-					tcp.SYN = false
-					tcp.ACK = false
-					tcp.RST = true
-					// send packet
-					_ = tcp.SetNetworkLayerForChecksum(&ipv4)
-					_ = gopacket.SerializeLayers(buf, opt, &eth, &ipv4, &tcp)
-					s.sendPacket(buf.Bytes())
+				if !(tcp.SYN && tcp.ACK) {
+					goto getNewData
 				}
-				goto getNewData
+				if uint16(tcp.DstPort) != binary.BigEndian.Uint16(hash[:2]) ||
+					tcp.Ack-1 != binary.BigEndian.Uint32(hash[2:6]) {
+					goto getNewData
+				}
+				if s.addResult(ipv4.SrcIP, port) {
+					return
+				}
+				// send RST
+				// swap
+				eth.SrcMAC, eth.DstMAC = eth.DstMAC, eth.SrcMAC
+				ipv4.SrcIP, ipv4.DstIP = ipv4.DstIP, ipv4.SrcIP
+				tcp.SrcPort, tcp.DstPort = tcp.DstPort, tcp.SrcPort
+				// tcp.Seq = tcp.Ack
+				// tcp.Ack = 0
+				tcp.Seq, tcp.Ack = tcp.Ack, tcp.Seq+1
+				// set flag
+				tcp.SYN = false
+				tcp.ACK = false
+				tcp.RST = true
+				// send packet
+				_ = tcp.SetNetworkLayerForChecksum(&ipv4)
+				_ = gopacket.SerializeLayers(buf, opt, &eth, &ipv4, &tcp)
+				s.sendPacket(buf.Bytes())
 			case layers.LayerTypeIPv6:
 				// check hash
 				sha.Reset()
@@ -177,29 +180,32 @@ func (s *Scanner) synParser(wg *sync.WaitGroup) {
 				sha.Write(s.salt)
 				hash = sha.Sum(nil)
 				// check port and ack
-				if uint16(tcp.DstPort) == binary.BigEndian.Uint16(hash[:2]) &&
-					tcp.Ack-1 == binary.BigEndian.Uint32(hash[2:6]) {
-					if s.addResult(ipv6.SrcIP, port) {
-						return
-					}
-					// send RST
-					// swap
-					eth.SrcMAC, eth.DstMAC = eth.DstMAC, eth.SrcMAC
-					ipv6.SrcIP, ipv6.DstIP = ipv6.DstIP, ipv6.SrcIP
-					tcp.SrcPort, tcp.DstPort = tcp.DstPort, tcp.SrcPort
-					// tcp.Seq = tcp.Ack
-					// tcp.Ack = 0
-					tcp.Seq, tcp.Ack = tcp.Ack, tcp.Seq+1
-					// set flag
-					tcp.SYN = false
-					tcp.ACK = false
-					tcp.RST = true
-					// send packet
-					_ = tcp.SetNetworkLayerForChecksum(&ipv6)
-					_ = gopacket.SerializeLayers(buf, opt, &eth, &ipv6, &tcp)
-					s.sendPacket(buf.Bytes())
+				if !(tcp.SYN && tcp.ACK) {
+					goto getNewData
 				}
-				goto getNewData
+				if uint16(tcp.DstPort) != binary.BigEndian.Uint16(hash[:2]) ||
+					tcp.Ack-1 != binary.BigEndian.Uint32(hash[2:6]) {
+					goto getNewData
+				}
+				if s.addResult(ipv6.SrcIP, port) {
+					return
+				}
+				// send RST
+				// swap
+				eth.SrcMAC, eth.DstMAC = eth.DstMAC, eth.SrcMAC
+				ipv6.SrcIP, ipv6.DstIP = ipv6.DstIP, ipv6.SrcIP
+				tcp.SrcPort, tcp.DstPort = tcp.DstPort, tcp.SrcPort
+				// tcp.Seq = tcp.Ack
+				// tcp.Ack = 0
+				tcp.Seq, tcp.Ack = tcp.Ack, tcp.Seq+1
+				// set flag
+				tcp.SYN = false
+				tcp.ACK = false
+				tcp.RST = true
+				// send packet
+				_ = tcp.SetNetworkLayerForChecksum(&ipv6)
+				_ = gopacket.SerializeLayers(buf, opt, &eth, &ipv6, &tcp)
+				s.sendPacket(buf.Bytes())
 			}
 		}
 	getNewData:

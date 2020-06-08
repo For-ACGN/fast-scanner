@@ -55,7 +55,7 @@ func main() {
 		Senders: senders,
 	}
 	if save != "" {
-		file, err := os.OpenFile(save, os.O_CREATE|os.O_APPEND, 644)
+		file, err := os.OpenFile(save, os.O_CREATE|os.O_APPEND, 0644)
 		if err != nil {
 			log.Fatalln(err)
 		}
